@@ -1,18 +1,141 @@
 use std::path::PathBuf;
 
-use aule_cache::{CacheManager, MetadataIndex, IndexEntry, install_artifact};
+use aule_cache::{CacheManager, MetadataIndex, IndexEntry, UserConfig, install_artifact};
 use aule_resolver::{ResolveRequest, resolve_from_path, resolve_from_git, is_git_url, ArtifactSource};
 
 use super::CliError;
 use crate::output;
+use crate::registry::{resolve_registry_url, RegistryClient, ResolveSkillRequest};
 
-pub fn run(source: String, git_ref: Option<String>, json: bool) -> Result<(), CliError> {
-    if is_git_url(&source) {
+pub fn run(
+    source: String,
+    git_ref: Option<String>,
+    version: Option<String>,
+    target: Option<String>,
+    json: bool,
+) -> Result<(), CliError> {
+    if source.starts_with('@') {
+        run_registry(&source, version, target, json)
+    } else if is_git_url(&source) {
         run_git(&source, git_ref.as_deref(), json)
     } else {
         let path = PathBuf::from(&source);
         run_local(path, json)
     }
+}
+
+fn run_registry(
+    identifier: &str,
+    version: Option<String>,
+    target: Option<String>,
+    json: bool,
+) -> Result<(), CliError> {
+    let mgr = CacheManager::new().map_err(|e| CliError::Internal(e.to_string()))?;
+    let config = UserConfig::load(&mgr).map_err(|e| CliError::Internal(e.to_string()))?;
+    let base_url = resolve_registry_url(None, config.registry_url.as_deref());
+    let client = RegistryClient::new(base_url, config.auth_token.clone());
+
+    if !json {
+        println!("Resolving {} from registry...", identifier);
+    }
+
+    let req = ResolveSkillRequest {
+        skill: identifier.to_string(),
+        version,
+        target: target.clone(),
+    };
+
+    let resolved = client.resolve_skill(&req)?;
+
+    if !json {
+        println!("Cloning from {}...", resolved.repo_url);
+    }
+
+    // Clone into temp dir
+    let temp_dir = std::env::temp_dir().join(format!("skill-install-{}", std::process::id()));
+    if temp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    let clone_status = std::process::Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            &resolved.git_ref,
+            &resolved.repo_url,
+            &temp_dir.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()
+        .map_err(|e| CliError::Internal(format!("failed to run git clone: {}", e)))?;
+
+    if !clone_status.success() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(CliError::User(format!(
+            "failed to clone {} (ref: {})",
+            resolved.repo_url, resolved.git_ref
+        )));
+    }
+
+    // Locate skill within the repo
+    let skill_dir = if resolved.skill_path == "." || resolved.skill_path.is_empty() {
+        temp_dir.clone()
+    } else {
+        temp_dir.join(&resolved.skill_path)
+    };
+
+    // Validate skill.yaml
+    let manifest_path = skill_dir.join("skill.yaml");
+    if !manifest_path.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(CliError::User(format!(
+            "no skill.yaml found at {} in the cloned repository",
+            resolved.skill_path
+        )));
+    }
+
+    // Use the existing local-path resolution + install flow
+    let skill_name = identifier
+        .trim_start_matches('@')
+        .replace('/', "__");
+
+    let request = ResolveRequest {
+        skill_name: skill_name.clone(),
+        version_constraint: None,
+        runtime_target: target.clone(),
+        local_path: Some(skill_dir.clone()),
+    };
+
+    let plan = resolve_from_path(&skill_dir, &request)
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            CliError::User(format!("failed to resolve skill: {}", e))
+        })?;
+
+    let result = install_plan(&plan, &skill_dir, "registry", json);
+
+    // Activate if a target was specified
+    if result.is_ok() {
+        if let Some(ref tgt) = target {
+            if !json {
+                println!("Activating for {}...", tgt);
+            }
+            // Delegate to the activate command
+            let activate_result =
+                super::activate::run(plan.skill_name.clone(), Some(tgt.clone()), json);
+            if let Err(e) = activate_result {
+                eprintln!("warning: installed but activation failed: {}", e);
+            }
+        }
+    }
+
+    // Clean up temp directory
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    result
 }
 
 fn run_local(path: PathBuf, json: bool) -> Result<(), CliError> {

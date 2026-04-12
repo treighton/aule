@@ -9,9 +9,21 @@ pub struct PolicyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PublisherInfo {
+    pub github_username: Option<String>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserConfig {
     pub default_targets: Option<Vec<String>>,
     pub policy: Option<PolicyConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<PublisherInfo>,
 }
 
 impl UserConfig {
@@ -60,6 +72,9 @@ mod tests {
                 allow: Some(vec!["trusted-publisher/*".into()]),
                 block: Some(vec!["malicious-pkg".into()]),
             }),
+            registry_url: None,
+            auth_token: None,
+            publisher: None,
         };
         config.save(&mgr).unwrap();
 

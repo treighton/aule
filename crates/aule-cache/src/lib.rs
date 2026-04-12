@@ -8,7 +8,7 @@ pub mod metadata;
 
 pub use activation::{ActivationRecord, ActivationState};
 pub use artifact::{artifact_path, install_artifact, remove_artifact};
-pub use config::{PolicyConfig, UserConfig};
+pub use config::{PolicyConfig, PublisherInfo, UserConfig};
 pub use error::CacheError;
 pub use integrity::{check_integrity, IntegrityReport};
 pub use manager::CacheManager;

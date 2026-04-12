@@ -3,6 +3,10 @@ pub mod build;
 pub mod init;
 pub mod install;
 pub mod list;
+pub mod login;
+pub mod logout;
+pub mod publish;
+pub mod search;
 pub mod validate;
 
 use thiserror::Error;

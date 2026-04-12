@@ -1,5 +1,6 @@
 mod commands;
 mod output;
+mod registry;
 
 use std::path::PathBuf;
 use std::process;
@@ -43,13 +44,19 @@ enum Commands {
         #[arg(long)]
         path: Option<PathBuf>,
     },
-    /// Install a skill from a local path or git URL
+    /// Install a skill from a local path, git URL, or registry (@owner/name)
     Install {
-        /// Path to the skill package, or a git URL
+        /// Path, git URL, or @owner/name registry identifier
         source: String,
         /// Git branch or tag to check out (only used with git URLs)
         #[arg(long = "ref")]
         git_ref: Option<String>,
+        /// Version constraint (only used with registry installs)
+        #[arg(long)]
+        version: Option<String>,
+        /// Target runtime to activate after install (only used with registry installs)
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Activate an installed skill for a runtime target
     Activate {
@@ -68,6 +75,34 @@ enum Commands {
         #[arg(long)]
         active: bool,
     },
+    /// Authenticate with the skill registry
+    Login {
+        /// Registry URL (default: https://aule.dev)
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Remove authentication token
+    Logout,
+    /// Publish a skill to the registry
+    Publish {
+        /// Path to the skill directory (default: current directory)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Git ref to publish (default: current branch)
+        #[arg(long = "ref")]
+        git_ref: Option<String>,
+    },
+    /// Search the skill registry
+    Search {
+        /// Search query
+        query: String,
+        /// Filter by runtime target
+        #[arg(long)]
+        runtime: Option<String>,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<u32>,
+    },
 }
 
 fn main() {
@@ -82,11 +117,26 @@ fn main() {
             output,
             path,
         } => commands::build::run(target, output, path, json_output),
-        Commands::Install { source, git_ref } => commands::install::run(source, git_ref, json_output),
+        Commands::Install {
+            source,
+            git_ref,
+            version,
+            target,
+        } => commands::install::run(source, git_ref, version, target, json_output),
         Commands::Activate { name, target } => commands::activate::run(name, target, json_output),
         Commands::List { installed, active } => {
             commands::list::run(installed, active, json_output)
         }
+        Commands::Login { registry } => commands::login::run(registry, json_output),
+        Commands::Logout => commands::logout::run(json_output),
+        Commands::Publish { path, git_ref } => {
+            commands::publish::run(path, git_ref, json_output)
+        }
+        Commands::Search {
+            query,
+            runtime,
+            limit,
+        } => commands::search::run(query, runtime, limit, json_output),
     };
 
     match result {
