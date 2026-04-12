@@ -4,50 +4,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Aule** is a design/planning repository for a **Skill Registry Ecosystem** — an open, runtime-agnostic protocol and first-party platform for discoverable, versioned, composable agent/coding skills. Think Go Modules + npm + OpenAPI + VS Code Extensions for AI agent capabilities.
+**Aule** is an open, runtime-agnostic skill ecosystem — a protocol and toolchain for discoverable, versioned, composable agent/coding skills. Think Go Modules + npm + OpenAPI + VS Code Extensions for AI agent capabilities.
 
-This repo contains no application code yet. It holds architectural documents, specification summaries, and OpenSpec-driven workflow artifacts used to plan and design the system.
+## Build & Test Commands
+
+```bash
+cargo build                     # Build all crates
+cargo test                      # Run all 96 tests
+cargo test -p aule-schema       # Test one crate
+cargo test -p aule-adapter --test real_skills_test  # Run real skill validation
+cargo run -p aule-cli -- --help # Run the CLI
+```
+
+The binary is named `skill` (defined in `aule-cli/Cargo.toml`).
 
 ## Repository Structure
 
-- `notes/` — Architectural reference documents:
-  - `skill_registry_ecosystem_architecture.md` — Blueprint defining the open protocol layer (domain model, identity/resolution, versioning, contracts, packaging, trust/security)
-  - `skill_registry_product_architecture_doc.md` — Product architecture mapping the blueprint into services, APIs, storage, and runtime components
-  - `skill_registry_spec_generation_summary.md` — Condensed brief used as input for generating full technical specifications
-- `openspec/` — OpenSpec workflow directory:
-  - `config.yaml` — OpenSpec configuration (currently using `spec-driven` schema)
-  - `changes/` — Active and archived change proposals
-  - `specs/` — Accumulated specifications (currently empty)
-- `.claude/`, `.codex/`, `.opencode/`, `.pi/` — OpenSpec skills and commands for multiple AI coding agents
+```
+crates/
+  aule-schema/     — Protocol types: manifest, contract, permissions, envelope, metadata
+  aule-adapter/    — Adapter generator: manifest → runtime-specific SKILL.md files
+  aule-resolver/   — Skill resolution: local path, cache, git URL, semver constraints
+  aule-cache/      — Local ~/.skills/ cache: artifacts, metadata index, activation state
+  aule-cli/        — `skill` binary: init, validate, build, install, activate, list
+skills/            — Skill source packages (manifest + content) for the 4 OpenSpec skills
+openspec/          — OpenSpec change management artifacts (proposal, design, specs, tasks)
+.claude/, .codex/  — Generated adapter output for Claude Code and Codex runtimes
+```
+
+## Architecture
+
+**Cargo workspace** with 5 crates. Library crates do the work; the CLI binary is a thin wrapper.
+
+```
+aule-cli (binary)
+  ├── aule-schema    (manifest parsing, contract validation, permissions)
+  ├── aule-adapter   (generates SKILL.md per runtime target)
+  ├── aule-resolver  (version resolution, policy checks, git clone)
+  └── aule-cache     (artifact storage, activation state)
+```
+
+**Skill source format:** A skill is a directory with `skill.yaml` (manifest) + `content/skill.md` (body). The adapter generator reads the manifest and produces runtime-specific files in `.claude/skills/`, `.codex/skills/`, etc.
+
+**Key design choice:** Adapter output is template + transform, not codegen. The skill body passes through byte-identical; only frontmatter is mapped per-runtime.
+
+**Validation gate:** `crates/aule-adapter/tests/real_skills_test.rs` generates all 4 OpenSpec skills and asserts output matches the existing hand-written adapter files.
 
 ## OpenSpec Workflow
 
-This project uses **OpenSpec** for structured change management. The workflow is:
-
-1. **Explore** (`/opsx:explore`) — Think through ideas without implementing
-2. **Propose** (`/opsx:propose`) — Create a change with proposal, design, and tasks artifacts
-3. **Apply** (`/opsx:apply`) — Implement tasks from a change
-4. **Archive** (`/opsx:archive`) — Archive completed changes
-
-Changes live in `openspec/changes/<name>/` and contain `proposal.md`, `design.md`, `tasks.md`, and optionally delta specs under `specs/`.
-
-Key commands:
 ```bash
-openspec list --json          # List active changes
-openspec status --change "<name>" --json  # Check change status
-openspec new change "<name>"  # Create a new change
+openspec list --json                                    # List active changes
+openspec status --change "<name>" --json                # Check change status
+openspec new change "<name>"                            # Create a new change
 openspec instructions <artifact-id> --change "<name>" --json  # Get artifact instructions
 ```
 
-## Key Architectural Concepts
+Changes live in `openspec/changes/<name>/` with: `proposal.md`, `design.md`, `specs/`, `tasks.md`.
 
-The skill ecosystem design is built around these core domain objects — understanding them is essential when working with the spec documents:
+## Key Domain Concepts
 
-- **Skill** — Discoverable logical capability with identity, taxonomy, and metadata
-- **Contract** — Versioned deterministic interface (input/output schemas, permissions, guarantees)
-- **Implementation** — Executable realization of a contract (language/runtime-agnostic)
-- **Adapter** — Runtime-specific plugin binding a host runtime to an implementation
-- **Artifact** — Distributable form (source, binary, wasm, container, bundle)
-- **Resolver** — Policy-driven engine selecting version + adapter + implementation + artifact
-
-The system has four planes: Publisher, Platform, Runtime, and Local Machine.
+- **Manifest** (`skill.yaml`) — Single source of truth for a skill's identity, contract, adapters, and dependencies
+- **Contract** — Versioned interface: inputs/outputs (prompt or JSON Schema), permissions, determinism bounds
+- **RuntimeTarget** — Defines directory layout and frontmatter mapping for a coding agent (Claude Code, Codex)
+- **Resolver** — Selects version + adapter + artifact from local path, cache, or git URL
+- **Activation** — Binding an installed skill to a specific runtime by generating adapter files
