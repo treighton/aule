@@ -1,0 +1,159 @@
+## Context
+
+The architecture documents in `notes/` define a comprehensive vision for a skill ecosystem — 11 backend services, 5 storage layers, 4 system planes. That's the long-term target. This design is for the v0 buildable slice: the core protocol schemas and a local-first Rust toolchain that can package a skill once and generate correct adapters for Claude Code and Codex.
+
+The existing OpenSpec skills in this repo (`.claude/`, `.codex/`, `.opencode/`, `.pi/`) demonstrate the current reality: identical SKILL.md content is manually copied into 4 runtime-specific directory structures with minor frontmatter variations. This is the problem the adapter generator solves.
+
+Current coding-agent skill format observations:
+- Claude Code: `.claude/skills/<name>/SKILL.md` (YAML frontmatter + markdown body), slash commands in `.claude/commands/<namespace>/<name>.md`
+- Codex: `.codex/skills/<name>/SKILL.md` (identical frontmatter + body), no commands directory
+- OpenCode: `.opencode/skills/<name>/SKILL.md` (identical), commands in `.opencode/commands/<name>.md` (flat, different frontmatter)
+- Pi: `.pi/skills/<name>/SKILL.md` (identical), prompts in `.pi/prompts/<name>.md` (different frontmatter)
+
+Key constraint: solo developer, Rust stack, local-first (no web services in v0).
+
+## Goals / Non-Goals
+
+**Goals:**
+- Define protocol schemas (manifest, contract, metadata endpoint, invocation envelope, permissions) rigorous enough that third parties could implement against them
+- Build a Rust Cargo workspace with crates for: schema validation, resolver, adapter generator, CLI, cache manager
+- Generate correct Claude Code and Codex adapter outputs from a single skill source
+- Validate against real skills (OpenSpec explore/propose/apply/archive)
+- Support prompt-based skills as the primary v0 skill type (markdown body + frontmatter metadata)
+- Establish the manifest as the single source of truth for a skill's identity, capabilities, and runtime targets
+- Distribute as a single static binary with no runtime dependencies
+
+**Non-Goals:**
+- Registry web service, search API, or hosted platform (Phase 3+)
+- Verification pipeline or trust badge system
+- Binary/Wasm/container artifact support (v0 is prompt/source artifacts only)
+- Dependency resolution across skills (v0 skills are standalone or declare external tool deps like `openspec` CLI)
+- Telemetry ingestion or analytics
+- Enterprise policy service
+- More than 2 runtime targets (Claude Code + Codex only in v0)
+- Monetization, billing, or marketplace mechanics
+- WASM or napi-rs bindings for JS runtimes (v0 uses CLI subprocess integration)
+
+## Decisions
+
+### 1. Cargo workspace with library crates + CLI binary
+
+**Decision:** Single repo with a Cargo workspace. Library crates for each concern, one binary crate for the CLI.
+
+**Rationale:** Cargo workspaces provide clean crate boundaries with shared compilation, dependency deduplication, and a single `cargo test` to run everything. Solo dev gets maximum code sharing with zero coordination overhead. The library/binary split means runtime plugins can shell out to the CLI binary while the core logic remains independently testable.
+
+**Structure:**
+```
+crates/
+  aule-schema/       — manifest + contract types, YAML parsing, JSON Schema validation
+  aule-resolver/     — resolution algorithm library
+  aule-adapter/      — adapter generator (manifest → runtime-specific output)
+  aule-cache/        — local install/activation state manager
+  aule-cli/          — binary crate, thin CLI wrapping other crates
+```
+
+**Alternatives considered:**
+- Single crate with modules: simpler but harder to extract libraries later
+- TypeScript monorepo: faster iteration but requires Node.js runtime, couples tooling to one ecosystem
+- Go: good CLI story but less type safety for schema validation; Rust's enum/serde model maps more naturally to the domain
+
+### 2. Manifest format: YAML with JSON Schema validation
+
+**Decision:** Skill manifests are YAML files (`skill.yaml`). The normative schema is defined as a JSON Schema file (`manifest.schema.json`) shipped alongside the binary. Parsing uses `serde_yaml` for deserialization into typed Rust structs, and `jsonschema` crate for validation against the JSON Schema when strict protocol compliance checking is needed.
+
+**Rationale:** YAML is the dominant format in the coding-agent skill ecosystem (SKILL.md frontmatter is YAML). JSON Schema provides machine-checkable validation that any language can consume. The dual approach — serde structs for internal use, JSON Schema for protocol compliance — gives both ergonomic Rust code and a language-neutral schema artifact.
+
+**Alternatives considered:**
+- Pure JSON manifests: more verbose, less author-friendly
+- TOML: less ecosystem support in the AI agent space
+- Serde-only validation (no JSON Schema): loses the language-neutral schema artifact that third parties need
+
+### 3. Adapter generator as template + transform, not codegen
+
+**Decision:** Adapters are generated by: (1) reading the manifest, (2) selecting a runtime-specific target definition that defines directory layout and frontmatter shape, (3) injecting skill content into that template. No AST manipulation or code generation.
+
+**Rationale:** For prompt-based skills, the adapter output is just file placement + frontmatter mapping. The skill body (markdown) passes through unchanged. This keeps the generator simple and deterministic. When binary/wasm artifacts are supported later, the generator gains artifact-copying steps but the template model still holds.
+
+**Runtime target definitions (as Rust structs):**
+- Claude Code: `RuntimeTarget { id: "claude-code", skill_path: ".claude/skills/{name}/SKILL.md", command_path: Some(".claude/commands/{namespace}/{name}.md"), supports_commands: true }`
+- Codex: `RuntimeTarget { id: "codex", skill_path: ".codex/skills/{name}/SKILL.md", command_path: None, supports_commands: false }`
+
+**Alternatives considered:**
+- Tera/Handlebars templates: overkill for what is mostly file copying with frontmatter injection
+- Plugin-based generator with dynamic loading: premature abstraction for 2 targets
+
+### 4. Skill source format: `skill.yaml` manifest + `content/` directory
+
+**Decision:** A skill source package is:
+```
+my-skill/
+  skill.yaml          — manifest (identity, contract, adapters, permissions)
+  content/
+    skill.md           — primary skill body (markdown)
+    commands/
+      explore.md       — optional slash command bodies
+```
+
+**Rationale:** Separating the manifest from the content keeps the protocol metadata machine-parseable while the skill body remains human-authored markdown. The `content/` directory mirrors the multi-file nature of skills (a skill may have a main body + multiple commands).
+
+### 5. Contract schema: lightweight for v0, extensible
+
+**Decision:** v0 contracts define: `inputs` (JSON Schema or "prompt" for unstructured), `outputs` (JSON Schema or "prompt"), `permissions` (array of permission vocabulary strings), and `determinism` (enum: deterministic | bounded | probabilistic). Behavioral and workflow metadata are optional extension fields.
+
+**Rationale:** Most current coding-agent skills are prompt-based — they take unstructured text in and produce unstructured text out. The contract schema needs to support this reality while leaving room for structured I/O later. Marking determinism bounds is cheap and immediately useful for trust/policy decisions. Rust enums model the `InputType::Prompt | InputType::Schema(JsonSchema)` distinction naturally.
+
+### 6. Local cache layout: `~/.skills/`
+
+**Decision:**
+```
+~/.skills/
+  cache/
+    artifacts/{identity-hash}/     — installed skill artifacts
+  metadata/
+    {identity-hash}.json           — cached manifest + resolution data
+  activations/
+    claude-code.json               — which skills are active for Claude Code
+    codex.json                     — which skills are active for Codex
+  config.json                      — user preferences and policy
+```
+
+**Rationale:** Single global location avoids per-project duplication for skills that are user-level (not project-level). Activation is per-runtime, matching the install vs. activate separation from the architecture. Identity hashes (SHA-256 via `sha2` crate) ensure no collisions across publishers. The `dirs` crate provides cross-platform home directory resolution.
+
+### 7. CLI as the primary interface, library-first design
+
+**Decision:** Every CLI subcommand is a thin wrapper around a library function in the corresponding crate. `skill init` calls `aule_schema::scaffold()`, `skill build` calls `aule_adapter::generate()`, etc. The CLI binary (`aule-cli`) depends on all library crates. CLI argument parsing uses `clap` with the derive API.
+
+**Rationale:** This means the resolver, adapter generator, and validator can be consumed as Rust libraries — and the CLI binary can be invoked as a subprocess by runtime plugins in any language. Future JS/Python runtime plugins shell out to `skill resolve --json` and parse the output. Solo dev builds one thing, gets both CLI and library.
+
+### 8. Identity model: domain/path for v1, local names for v0
+
+**Decision:** v0 skills use simple kebab-case names (e.g., `openspec-explore`). The manifest schema includes an optional `identity` field for the full domain/path format (`skills.acme.dev/workflow/explore`), but the resolver and CLI don't require it in v0.
+
+**Rationale:** Domain-based identity requires DNS and metadata endpoint infrastructure that doesn't exist yet. Local names are sufficient for the build→generate→install→activate loop. The manifest schema reserves the field so v0 manifests are forward-compatible.
+
+### 9. Runtime plugin integration via CLI subprocess
+
+**Decision:** In v0 (and likely beyond), coding-agent runtime plugins integrate with the skill toolchain by spawning the `skill` CLI binary as a subprocess and parsing JSON output from stdout. All CLI commands support a `--json` flag for machine-readable output.
+
+**Rationale:** Both Claude Code and Codex are Node.js-based, but the skill operations (resolve, install, activate) are infrequent and non-interactive — process spawn overhead is negligible. This approach requires zero FFI, no native module compilation, and no WASM bridging. It's the same integration pattern used by `git`, `docker`, and `openspec`. If tighter integration is needed later, WASM or napi-rs bindings can be added without changing the core crates.
+
+**Alternatives considered:**
+- napi-rs native Node module: fast but adds platform-specific build matrix, overkill for infrequent operations
+- WASM compilation: adds build complexity for minimal benefit in v0
+- Rewrite in TypeScript: loses single-binary distribution and runtime-neutral positioning
+
+## Risks / Trade-offs
+
+**[Rust development is slower than TypeScript for this domain] → Mitigation:** The v0 scope is modest — YAML parsing, file copying, JSON serialization. Serde makes the data model work ergonomic. The compiler catches bugs that would otherwise surface as runtime surprises in a solo codebase with no code reviewer.
+
+**[Manifest schema locks in early] → Mitigation:** Version the schema explicitly (`schemaVersion: "0.1.0"`). Keep v0 fields minimal — only what's needed for prompt-based skills with 2 runtime targets. Extension namespaces absorb runtime-specific fields without polluting the core. Serde's `#[serde(deny_unknown_fields)]` vs `#[serde(flatten)]` gives precise control over strictness.
+
+**[Two runtime targets may not surface enough adapter variation] → Mitigation:** Claude Code and Codex have meaningfully different structures (commands vs no-commands, different frontmatter). Adding OpenCode or Pi as validation-only targets (not built, just compared) would catch more edge cases cheaply.
+
+**[Prompt-based skills are too simple to stress-test the contract model] → Mitigation:** Accepted. v0 contracts will be simple. The schema is designed to grow — structured I/O, behavioral metadata, and workflow semantics are optional fields that activate when needed.
+
+**[Solo dev scope creep risk] → Mitigation:** The spec explicitly excludes registry, verification, telemetry, and enterprise features. The "done" criteria for v0 is: `skill build` produces correct Claude Code + Codex outputs for the 4 OpenSpec skills.
+
+**[Cache/activation model may not match how runtimes actually discover skills] → Mitigation:** v0 activation is "copy files to the right directory." The activation manager tracks state but the physical mechanism is file placement. This may evolve, but it works today for both Claude Code and Codex.
+
+**[Rust binary distribution requires cross-compilation for multiple platforms] → Mitigation:** Use `cargo-dist` or GitHub Actions cross-compile matrix for releases. During development, `cargo install --path crates/aule-cli` works on the developer's own platform. Cross-platform distribution is a release concern, not a development blocker.

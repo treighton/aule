@@ -1,0 +1,25 @@
+schemaVersion: "0.1.0"
+name: "openspec-explore"
+description: "Enter explore mode - a thinking partner for exploring ideas, investigating problems, and clarifying requirements. Use when the user wants to think through something before or during a change."
+version: "1.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions:
+    - "process.spawn"
+  determinism: "probabilistic"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "openspec"
+  license: "MIT"
+  generatedBy: "1.3.0"
+dependencies:
+  tools:
+    - name: "openspec"

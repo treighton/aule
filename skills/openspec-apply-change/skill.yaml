@@ -1,0 +1,25 @@
+schemaVersion: "0.1.0"
+name: "openspec-apply-change"
+description: "Implement tasks from an OpenSpec change. Use when the user wants to start implementing, continue implementation, or work through tasks."
+version: "1.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions:
+    - "process.spawn"
+  determinism: "probabilistic"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "openspec"
+  license: "MIT"
+  generatedBy: "1.3.0"
+dependencies:
+  tools:
+    - name: "openspec"

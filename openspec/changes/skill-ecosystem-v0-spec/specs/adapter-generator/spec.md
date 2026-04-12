@@ -1,0 +1,71 @@
+## ADDED Requirements
+
+### Requirement: Runtime target registry
+The adapter generator SHALL maintain a registry of supported runtime targets. Each target SHALL define: `id` (string, e.g., `"claude-code"`), `skillOutputPath` (template string for skill file placement), `commandOutputPath` (template string for command file placement, or null if unsupported), `frontmatterSchema` (object defining required/optional frontmatter fields and their mappings from manifest fields), and `supportsCommands` (boolean).
+
+#### Scenario: Claude Code target definition
+- **WHEN** the generator loads the `claude-code` target
+- **THEN** the target SHALL define `skillOutputPath: ".claude/skills/{name}/SKILL.md"`, `commandOutputPath: ".claude/commands/{namespace}/{commandName}.md"`, `supportsCommands: true`, and frontmatter fields `name`, `description`, `license`, `compatibility`, `metadata`
+
+#### Scenario: Codex target definition
+- **WHEN** the generator loads the `codex` target
+- **THEN** the target SHALL define `skillOutputPath: ".codex/skills/{name}/SKILL.md"`, `commandOutputPath: null`, `supportsCommands: false`, and the same frontmatter fields as Claude Code
+
+### Requirement: Skill file generation
+The adapter generator SHALL produce a SKILL.md file for each enabled runtime target by: (1) constructing YAML frontmatter from the manifest fields mapped through the target's frontmatter schema, (2) appending the skill content body from the file referenced by `content.skill` in the manifest, unchanged.
+
+#### Scenario: Generate Claude Code SKILL.md
+- **WHEN** the generator runs for a skill with `name: "openspec-explore"` targeting `claude-code`
+- **THEN** it SHALL write `.claude/skills/openspec-explore/SKILL.md` with YAML frontmatter containing `name`, `description`, `license`, `compatibility` (from tool dependencies), and `metadata` fields, followed by the verbatim content of the skill markdown body
+
+#### Scenario: Skill body is passed through unchanged
+- **WHEN** the skill content file contains markdown with code blocks, diagrams, and formatting
+- **THEN** the generated SKILL.md body after the frontmatter SHALL be byte-identical to the source content file
+
+### Requirement: Command file generation
+For runtime targets with `supportsCommands: true`, the adapter generator SHALL produce a command file for each entry in the manifest's `content.commands` mapping. Each command file SHALL have runtime-specific frontmatter (mapped from manifest metadata) followed by the command content body.
+
+#### Scenario: Generate Claude Code command files
+- **WHEN** a manifest declares `content.commands: { explore: "content/commands/explore.md" }` and the `claude-code` adapter has commands enabled
+- **THEN** the generator SHALL write `.claude/commands/{namespace}/explore.md` where `{namespace}` is derived from the manifest name or a configurable namespace field
+
+#### Scenario: Skip commands for Codex
+- **WHEN** the generator runs for the `codex` target
+- **THEN** it SHALL NOT generate any command files regardless of the manifest's `content.commands`
+
+### Requirement: Frontmatter field mapping
+The adapter generator SHALL map manifest fields to runtime-specific frontmatter according to the target's frontmatter schema. The mapping SHALL handle: `name` → frontmatter `name`, `description` → frontmatter `description`, `metadata.license` → frontmatter `license`, `dependencies.tools` → frontmatter `compatibility` string, `metadata` → frontmatter `metadata` object.
+
+#### Scenario: Tool dependency mapped to compatibility
+- **WHEN** a manifest declares `dependencies.tools: [{ name: "openspec", version: ">=1.0.0" }]`
+- **THEN** the generated frontmatter SHALL include `compatibility: "Requires openspec CLI."` (or a formatted string derived from the tool dependencies)
+
+#### Scenario: Metadata passthrough
+- **WHEN** a manifest declares `metadata: { author: "openspec", version: "1.0" }`
+- **THEN** the generated frontmatter `metadata` object SHALL contain `author: "openspec"` and `version: "1.0"`
+
+### Requirement: Output directory management
+The adapter generator SHALL create output directories as needed. It SHALL overwrite existing generated files. It SHALL NOT delete files it did not generate. The generator SHALL write a `.generated` marker file in each runtime output directory containing the skill name, generation timestamp, and manifest hash.
+
+#### Scenario: Clean generation into empty project
+- **WHEN** the generator runs in a project with no existing `.claude/` directory
+- **THEN** it SHALL create `.claude/skills/{name}/SKILL.md` and `.claude/skills/{name}/.generated`
+
+#### Scenario: Regeneration overwrites existing
+- **WHEN** the generator runs and `.claude/skills/{name}/SKILL.md` already exists from a previous generation
+- **THEN** it SHALL overwrite the file with the newly generated content
+
+#### Scenario: Non-generated files are preserved
+- **WHEN** the generator runs and `.claude/skills/other-skill/SKILL.md` exists (not generated by this skill)
+- **THEN** that file SHALL NOT be modified or deleted
+
+### Requirement: Validation pass before generation
+The adapter generator SHALL validate the manifest and all referenced content files before producing any output. If validation fails, no files SHALL be written and the generator SHALL return all validation errors.
+
+#### Scenario: Invalid manifest prevents generation
+- **WHEN** the generator is invoked with a manifest missing required fields
+- **THEN** no output files SHALL be created and the generator SHALL return validation errors
+
+#### Scenario: Missing content file prevents generation
+- **WHEN** a manifest references `content.skill: "content/skill.md"` but the file does not exist
+- **THEN** no output files SHALL be created and the error SHALL identify the missing content file
