@@ -1,0 +1,10 @@
+{
+  "name": "api-contract-tester-logic",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tool scripts for the api-contract-tester skill",
+  "type": "module",
+  "engines": {
+    "node": ">= 18"
+  }
+}

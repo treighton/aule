@@ -1,6 +1,6 @@
-use aule_adapter::{generate, GenerateOptions, RuntimeTarget};
-use aule_cache::{ActivationRecord, ActivationState, CacheManager, MetadataIndex};
-use aule_schema::manifest;
+use aule_adapter::{generate_any, GenerateOptions, RuntimeTarget};
+use aule_cache::{ActivationRecord, ActivationState, CacheManager, MetadataIndex, execute_hook};
+use aule_schema::manifest::{self, ManifestAny};
 
 use super::CliError;
 use crate::output;
@@ -17,9 +17,9 @@ pub fn run(name: String, target: Option<String>, json: bool) -> Result<(), CliEr
         .find(|e| e.name == name)
         .ok_or_else(|| CliError::User(format!("skill \"{}\" is not installed", name)))?;
 
-    // Load manifest from the stored manifest path
+    // Load manifest from the stored manifest path (supports both v0.1.0 and v0.2.0)
     let manifest_path = std::path::Path::new(&entry.manifest_path);
-    let m = manifest::load_manifest(manifest_path)
+    let manifest_any = manifest::load_manifest_any(manifest_path)
         .map_err(|e| CliError::User(format!("failed to load manifest: {}", e)))?;
 
     let base_path = manifest_path
@@ -32,7 +32,7 @@ pub fn run(name: String, target: Option<String>, json: bool) -> Result<(), CliEr
             .map(|rt| vec![rt])
             .ok_or_else(|| CliError::User(format!("unknown target: {}", t)))?
     } else {
-        m.adapters
+        manifest_any.adapters()
             .iter()
             .filter(|(_, cfg)| cfg.enabled)
             .filter_map(|(id, _)| RuntimeTarget::by_id(id))
@@ -51,7 +51,7 @@ pub fn run(name: String, target: Option<String>, json: bool) -> Result<(), CliEr
             output_dir: None, // generates into current directory
         };
 
-        let generated = generate(&m, base_path, &options)
+        let generated = generate_any(&manifest_any, base_path, &options)
             .map_err(|e| CliError::User(format!("generate failed for {}: {}", rt.id, e)))?;
 
         let output_paths: Vec<String> = generated.iter().map(|f| f.relative_path.clone()).collect();
@@ -73,6 +73,38 @@ pub fn run(name: String, target: Option<String>, json: bool) -> Result<(), CliEr
             .map_err(|e| CliError::Internal(e.to_string()))?;
 
         activated.push(rt.id.clone());
+    }
+
+    // Run onActivate hook if present (v0.2.0 manifests)
+    if let ManifestAny::V2(ref m) = manifest_any {
+        if let Some(ref hooks) = m.hooks {
+            if let Some(ref on_activate) = hooks.on_activate {
+                let hook_path = base_path.join(on_activate);
+                if !json {
+                    println!("Running onActivate hook...");
+                }
+                match execute_hook(&hook_path, base_path) {
+                    Ok(result) => {
+                        if result.success {
+                            if !json {
+                                println!("  onActivate hook completed successfully.");
+                            }
+                        } else {
+                            eprintln!(
+                                "warning: onActivate hook failed (exit {})",
+                                result.exit_code.map_or("unknown".to_string(), |c| c.to_string())
+                            );
+                            if !result.stderr.is_empty() {
+                                eprintln!("  {}", result.stderr.trim());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("warning: could not run onActivate hook: {}", e);
+                    }
+                }
+            }
+        }
     }
 
     if json {

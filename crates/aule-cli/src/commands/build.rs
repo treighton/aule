@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aule_adapter::{generate, GenerateOptions};
+use aule_adapter::{generate_any, GenerateOptions};
 
 use super::validate;
 use super::CliError;
@@ -14,15 +14,15 @@ pub fn run(
 ) -> Result<(), CliError> {
     let base_path = path.unwrap_or_else(|| PathBuf::from("."));
 
-    // Validate first
-    let manifest = validate::validate_and_load(&base_path)?;
+    // Validate first (supports both v0.1.0 and v0.2.0)
+    let manifest = validate::validate_and_load_any(&base_path)?;
 
     let options = GenerateOptions {
         targets: target.into_iter().collect(),
         output_dir,
     };
 
-    let generated = generate(&manifest, &base_path, &options)
+    let generated = generate_any(&manifest, &base_path, &options)
         .map_err(|e| CliError::User(e.to_string()))?;
 
     if json {

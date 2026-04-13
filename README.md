@@ -87,49 +87,53 @@ skill list --active
 ## How It Works
 
 ```
-                    skill.yaml + content/skill.md
+              skill.yaml + content/ + logic/
                                │
                                ▼
                     ┌─────────────────────┐
-                    │    aule-schema      │  Parse & validate manifest,
-                    │                     │  contract, permissions
+                    │    aule-schema      │  Parse & validate manifest
+                    │                     │  (v0.1.0 or v0.2.0)
                     └─────────┬───────────┘
                               │
                               ▼
                     ┌─────────────────────┐
-                    │    aule-adapter     │  Generate runtime-specific
-                    │                     │  SKILL.md with frontmatter
+                    │    aule-adapter     │  Generate SKILL.md per skill,
+                    │                     │  wrapper scripts, tool docs,
+                    │                     │  copy bundled files
                     └─────────┬───────────┘
                               │
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
      .claude/skills/   .codex/skills/    (future runtimes)
       SKILL.md          SKILL.md
+      tools/            tools/
+      logic/            logic/
 ```
 
-The key design principle: **your skill body passes through unchanged**. Only the YAML frontmatter is adapted per runtime. This preserves author intent and keeps diffs readable.
+The key design principle: **your skill body passes through unchanged**. Only the YAML frontmatter is adapted per runtime. For v0.2.0, the adapter also generates wrapper scripts, appends tool documentation, and copies included files.
 
 ## Skill Manifest
 
-A `skill.yaml` declares everything about a skill:
+A `skill.yaml` declares everything about a skill. Aulë supports two schema versions:
+
+### v0.1.0 — Single-skill packages (prose-only)
 
 ```yaml
 schemaVersion: "0.1.0"
 name: "my-skill"
 description: "A brief description for discovery and triggering"
-version: "1.0"
+version: "1.0.0"
 
 content:
   skill: "content/skill.md"
 
 contract:
   version: "1.0.0"
-  inputs: "prompt"            # or JSON Schema
-  outputs: "prompt"           # or JSON Schema
+  inputs: "prompt"
+  outputs: "prompt"
   permissions:
     - "filesystem.read"
-    - "process.spawn"
-  determinism: "probabilistic" # deterministic | bounded | probabilistic
+  determinism: "probabilistic"
 
 adapters:
   claude-code:
@@ -140,27 +144,68 @@ adapters:
 metadata:
   author: "your-name"
   license: "MIT"
-
-dependencies:
-  tools:
-    - name: "external-cli"
-      version: "1.0"
-  skills:
-    - name: "base-skill"
-      version: "^1.0"
 ```
 
-### Contract
+### v0.2.0 — Multi-skill packages with executable tools
 
-The contract is the versioned interface. It declares:
+v0.2.0 adds support for multiple skills per package, executable tools with typed I/O, and lifecycle hooks:
 
-| Field | Purpose |
-|-------|---------|
-| `inputs` / `outputs` | `"prompt"` for unstructured text, or a JSON Schema for structured data |
-| `permissions` | Capabilities the skill requires (filesystem, network, process scopes) |
-| `determinism` | Whether output is deterministic, bounded, or probabilistic |
-| `errors` | Error codes the skill can produce |
-| `behavior.timeout_ms` | Maximum execution time |
+```yaml
+schemaVersion: "0.2.0"
+name: "api-testing-suite"
+description: "API contract testing with executable tools"
+version: "1.0.0"
+
+files:                          # Glob patterns for bundled files
+  - "content/**"
+  - "logic/**"
+
+skills:                         # Map of skill name → definition
+  contract-tester:
+    description: "Generate and run contract tests"
+    entrypoint: "content/contract-tester.md"
+    version: "1.0.0"
+    permissions: ["filesystem.read", "process.spawn", "network.external"]
+    determinism: "bounded"
+
+  spec-linter:
+    description: "Validate an OpenAPI spec"
+    entrypoint: "content/spec-linter.md"
+    version: "1.0.0"
+    permissions: ["filesystem.read"]
+    determinism: "deterministic"
+
+tools:                          # Executable tools with typed I/O
+  generate:
+    description: "Generate test harness from an OpenAPI spec"
+    using: "node"
+    version: ">= 18"
+    entrypoint: "logic/tools/generate.ts"
+    input:
+      type: "object"
+      properties:
+        spec: { type: "string" }
+      required: ["spec"]
+    output:
+      type: "object"
+      properties:
+        status: { type: "string" }
+        testCount: { type: "integer" }
+
+hooks:                          # Lifecycle scripts
+  onInstall: "logic/hooks/setup.sh"
+  onActivate: "logic/hooks/verify-runtime.sh"
+
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+```
+
+The adapter generates wrapper scripts for tools, appends tool documentation to SKILL.md, and copies included files into the output directory.
+
+To migrate an existing v0.1.0 manifest: `skill migrate --path my-skill/`
 
 ### Permission Vocabulary
 
@@ -189,10 +234,10 @@ aule-cli (binary: `skill`)
 
 | Crate | Role | Key Types |
 |-------|------|-----------|
-| **aule-schema** | Protocol types and validation | `Manifest`, `Contract`, `Permission`, `Envelope` |
-| **aule-adapter** | Adapter generation | `RuntimeTarget`, `GeneratedFile`, `generate()` |
+| **aule-schema** | Protocol types and validation | `Manifest`, `ManifestV2`, `ManifestAny`, `Contract`, `SkillDefinition`, `Tool`, `Hooks` |
+| **aule-adapter** | Adapter generation | `RuntimeTarget`, `GeneratedFile`, `generate()`, `generate_v2()`, `generate_any()` |
 | **aule-resolver** | Skill resolution from multiple sources | `ResolveRequest`, `ResolvePlan`, `resolve()` |
-| **aule-cache** | Local cache and activation state | `Cache`, `Artifact`, `ActivationState` |
+| **aule-cache** | Local cache, activation, hook execution | `CacheManager`, `ActivationState`, `execute_hook()` |
 | **aule-cli** | CLI binary wrapping all crates | `Commands` enum, subcommand handlers |
 
 ### Local Cache
@@ -224,6 +269,7 @@ skill init [--name <NAME>]                Initialize a new skill package
 skill validate [--path <PATH>]            Validate manifest and contract
 skill build [--path <PATH>] [--target <RUNTIME>] [--output <DIR>]
                                           Generate adapter output
+skill migrate [--path <PATH>]             Migrate a v0.1.0 manifest to v0.2.0
 skill install <SOURCE> [--ref <GIT_REF>] [--version <CONSTRAINT>] [--target <RUNTIME>]
                                           Install from path, git, or registry
 skill activate <NAME> [--target <RUNTIME>]
@@ -271,7 +317,7 @@ User configuration lives in `~/.skills/config.json`:
 
 ```bash
 cargo build                # Build all crates
-cargo test                 # Run all tests (~97 tests)
+cargo test                 # Run all tests (~122 tests)
 cargo test -p aule-schema  # Test a single crate
 ```
 
@@ -305,12 +351,13 @@ aule/
 │   ├── aule-cache/        # Local cache and activation
 │   └── aule-cli/          # CLI binary
 ├── examples/              # Example skill packages
-│   ├── skill-init/
+│   ├── skill-init/              # v0.1.0 examples
 │   ├── skill-validate/
 │   ├── skill-build/
 │   ├── skill-publish/
 │   ├── skill-develop/
-│   └── skill-scout/
+│   ├── skill-scout/
+│   └── api-contract-tester/     # v0.2.0 multi-skill + tools example
 ├── platform/              # Registry web application (Next.js + Supabase)
 ├── .claude/skills/        # Generated Claude Code adapter output
 └── .codex/skills/         # Generated Codex adapter output
@@ -320,15 +367,17 @@ aule/
 
 ### Done
 
-- [x] Manifest schema and validation (`skill.yaml`)
+- [x] Manifest schema v0.1.0 — single-skill packages with prose content
+- [x] Manifest schema v0.2.0 — multi-skill packages, executable tools, lifecycle hooks
 - [x] Contract model (inputs, outputs, permissions, determinism)
 - [x] Permission vocabulary with policy enforcement
-- [x] Adapter generator (manifest to runtime-specific SKILL.md)
+- [x] Adapter generator (v0.1.0: SKILL.md; v0.2.0: SKILL.md + wrapper scripts + tool docs + file bundling)
 - [x] Multi-source resolver (local path, git URL, registry identifier)
 - [x] Local cache with integrity verification (`~/.skills/`)
-- [x] CLI with full lifecycle: `init`, `validate`, `build`, `install`, `activate`, `list`
+- [x] Lifecycle hooks (onInstall, onActivate, onUninstall)
+- [x] CLI with full lifecycle: `init`, `validate`, `build`, `install`, `activate`, `list`, `migrate`
 - [x] Registry commands: `login`, `logout`, `publish`, `search`
-- [x] Six example skills demonstrating the skill format and CLI usage
+- [x] Seven example skills (six v0.1.0, one v0.2.0 with tools and hooks)
 
 ### In Progress
 
@@ -343,7 +392,7 @@ Contributions are welcome. Here's how to get started:
 
 1. **Fork and clone** the repository
 2. **Create a branch** for your change
-3. **Write tests** — the project has ~97 tests and additions should maintain coverage
+3. **Write tests** — the project has ~122 tests and additions should maintain coverage
 4. **Run `cargo test`** to verify everything passes
 5. **Submit a pull request** with a clear description of what and why
 

@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aule.dev/schemas/manifest.schema.json",
+  "title": "Aulë Skill Manifest",
+  "description": "Schema for skill.yaml manifest files (v0.1.0 and v0.2.0)",
+  "type": "object",
+  "required": ["schemaVersion", "name", "description", "version"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["0.1.0", "0.2.0"],
+      "description": "Schema version — determines which fields are required"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Package name in kebab-case"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Short description of the package"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Package version (semver)"
+    },
+    "identity": {
+      "type": "string",
+      "description": "Optional domain/path identity string"
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/AdapterConfig" },
+      "description": "Runtime adapter configurations"
+    },
+    "dependencies": { "$ref": "#/$defs/Dependencies" },
+    "metadata": { "$ref": "#/$defs/ManifestMetadata" },
+    "extensions": {
+      "type": "object",
+      "description": "Vendor extension namespaces"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": "0.1.0" } }
+      },
+      "then": {
+        "required": ["content", "contract"],
+        "properties": {
+          "content": { "$ref": "#/$defs/ContentPaths" },
+          "contract": { "$ref": "#/$defs/ContractRef" }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["files"] },
+            { "required": ["skills"] },
+            { "required": ["tools"] },
+            { "required": ["hooks"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": "0.2.0" } }
+      },
+      "then": {
+        "required": ["files", "skills"],
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Glob patterns for files bundled with the package"
+          },
+          "skills": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": { "$ref": "#/$defs/SkillDefinition" },
+            "description": "Map of skill name to skill definition"
+          },
+          "tools": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/Tool" },
+            "description": "Map of tool name to tool definition"
+          },
+          "hooks": { "$ref": "#/$defs/Hooks" }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["content"] },
+            { "required": ["contract"] }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ContentPaths": {
+      "type": "object",
+      "required": ["skill"],
+      "properties": {
+        "skill": {
+          "type": "string",
+          "description": "Path to the main skill content file"
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Map of command name to command content file path"
+        }
+      }
+    },
+    "ContractRef": {
+      "oneOf": [
+        { "type": "string", "description": "Path to external contract file" },
+        { "$ref": "#/$defs/Contract" }
+      ]
+    },
+    "Contract": {
+      "type": "object",
+      "required": ["version", "inputs", "outputs"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "inputs": { "$ref": "#/$defs/InputOutput" },
+        "outputs": { "$ref": "#/$defs/InputOutput" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "determinism": {
+          "type": "string",
+          "enum": ["deterministic", "bounded", "probabilistic"],
+          "default": "probabilistic"
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ContractError" }
+        },
+        "behavior": { "$ref": "#/$defs/BehavioralMetadata" }
+      }
+    },
+    "InputOutput": {
+      "oneOf": [
+        { "type": "string", "const": "prompt" },
+        { "type": "object", "description": "JSON Schema for structured I/O" }
+      ]
+    },
+    "ContractError": {
+      "type": "object",
+      "required": ["code", "description"],
+      "properties": {
+        "code": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "BehavioralMetadata": {
+      "type": "object",
+      "properties": {
+        "latencyClass": {
+          "type": "string",
+          "enum": ["fast", "moderate", "slow"]
+        },
+        "costClass": {
+          "type": "string",
+          "enum": ["free", "low", "medium", "high"]
+        },
+        "sideEffects": { "type": "boolean" }
+      }
+    },
+    "SkillDefinition": {
+      "type": "object",
+      "required": ["description", "entrypoint", "version"],
+      "properties": {
+        "description": { "type": "string" },
+        "entrypoint": {
+          "type": "string",
+          "description": "Path to the skill's Markdown content file"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "inputs": { "$ref": "#/$defs/InputOutput" },
+        "outputs": { "$ref": "#/$defs/InputOutput" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "determinism": {
+          "type": "string",
+          "enum": ["deterministic", "bounded", "probabilistic"],
+          "default": "probabilistic"
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ContractError" }
+        },
+        "behavior": { "$ref": "#/$defs/BehavioralMetadata" },
+        "commands": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Map of command name to command content file path"
+        }
+      }
+    },
+    "Tool": {
+      "type": "object",
+      "required": ["description", "using", "entrypoint"],
+      "properties": {
+        "description": { "type": "string" },
+        "using": {
+          "type": "string",
+          "description": "Runtime: node, python, shell"
+        },
+        "version": {
+          "type": "string",
+          "description": "Runtime version constraint (e.g., \">= 18\")"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "Path to the tool's executable script"
+        },
+        "input": {
+          "type": "object",
+          "description": "JSON Schema for tool input"
+        },
+        "output": {
+          "type": "object",
+          "description": "JSON Schema for tool output"
+        }
+      }
+    },
+    "Hooks": {
+      "type": "object",
+      "properties": {
+        "onInstall": {
+          "type": "string",
+          "description": "Path to shell script run after installation"
+        },
+        "onActivate": {
+          "type": "string",
+          "description": "Path to shell script run after activation"
+        },
+        "onUninstall": {
+          "type": "string",
+          "description": "Path to shell script run before uninstallation"
+        }
+      }
+    },
+    "AdapterConfig": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "Dependencies": {
+      "type": "object",
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "ManifestMetadata": {
+      "type": "object",
+      "properties": {
+        "author": { "type": "string" },
+        "license": { "type": "string" },
+        "homepage": { "type": "string" },
+        "repository": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

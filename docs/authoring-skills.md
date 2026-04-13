@@ -6,10 +6,15 @@ This guide walks through creating, testing, and publishing a skill for Aulë.
 
 A skill is a reusable capability for AI coding agents. It's a directory containing:
 
-- **`skill.yaml`** — the manifest declaring identity, contract, and adapter configuration
+- **`skill.yaml`** — the manifest declaring identity, interface, and adapter configuration
 - **`content/skill.md`** — the skill body that the agent sees and follows
+- *(v0.2.0)* **`logic/`** — optional executable tool scripts and hook scripts
 
-When you build a skill, Aule generates runtime-specific output (e.g., `.claude/skills/my-skill/SKILL.md`) that the target agent can consume directly.
+When you build a skill, Aulë generates runtime-specific output (e.g., `.claude/skills/my-skill/SKILL.md`) that the target agent can consume directly.
+
+Aulë supports two manifest versions:
+- **v0.1.0** — single-skill packages with prose content
+- **v0.2.0** — multi-skill packages with executable tools, typed I/O, and lifecycle hooks
 
 ## Creating a Skill
 
@@ -60,7 +65,7 @@ metadata:
   license: "MIT"
 ```
 
-### Field reference
+### Field reference (v0.1.0)
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -84,6 +89,115 @@ metadata:
 | `dependencies.skills` | No | Other skills this skill depends on |
 | `identity` | No | Protocol-level identity (e.g., `skills.example.com/my-skill`) |
 | `extensions` | No | Forward-compatible extension fields |
+
+## v0.2.0 Multi-Skill Packages
+
+v0.2.0 replaces `content` with `files` and `contract` with `skills`, and adds `tools` and `hooks`.
+
+### v0.2.0 manifest example
+
+```yaml
+schemaVersion: "0.2.0"
+name: "my-package"
+description: "A multi-skill package with tools"
+version: "1.0.0"
+
+files:
+  - "content/**"
+  - "logic/**"
+
+skills:
+  analyzer:
+    description: "Analyze code for issues"
+    entrypoint: "content/analyzer.md"
+    version: "1.0.0"
+    permissions: ["filesystem.read"]
+    determinism: "probabilistic"
+    commands:
+      analyze: "content/commands/analyze.md"
+
+  fixer:
+    description: "Auto-fix common issues"
+    entrypoint: "content/fixer.md"
+    version: "1.0.0"
+    permissions: ["filesystem.read", "filesystem.write"]
+    determinism: "bounded"
+
+tools:
+  scan:
+    description: "Scan files for patterns"
+    using: "node"
+    version: ">= 18"
+    entrypoint: "logic/tools/scan.ts"
+    input:
+      type: "object"
+      properties:
+        pattern: { type: "string" }
+      required: ["pattern"]
+    output:
+      type: "object"
+      properties:
+        matches: { type: "array" }
+
+hooks:
+  onInstall: "logic/hooks/setup.sh"
+
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+
+metadata:
+  author: "your-name"
+  license: "MIT"
+```
+
+### Key differences from v0.1.0
+
+| v0.1.0 | v0.2.0 | Change |
+|--------|--------|--------|
+| `content.skill` | `skills.<name>.entrypoint` | Per-skill entrypoints (multiple skills per package) |
+| `contract` | `skills.<name>.*` | Interface fields move into each skill definition |
+| Single skill | `skills` map | Multiple skills with distinct interfaces |
+| *(none)* | `files` | Glob patterns for bundled files |
+| *(none)* | `tools` | Executable tools with typed JSON Schema I/O |
+| *(none)* | `hooks` | Lifecycle scripts (onInstall, onActivate, onUninstall) |
+
+### Tools
+
+Tools are executable scripts that skills invoke via wrapper scripts. Each tool declares:
+
+- **`using`** — runtime: `node`, `python`, or `shell`
+- **`version`** — optional runtime version constraint
+- **`entrypoint`** — path to the script
+- **`input`/`output`** — JSON Schema for typed I/O
+
+The adapter generates:
+- A shell wrapper script per tool (`tools/<name>`) that agents can execute
+- A `## Tools` documentation section appended to each SKILL.md
+
+Tools accept JSON as the first positional argument and write JSON to stdout.
+
+### Hooks
+
+Lifecycle hooks run shell scripts at defined moments:
+
+| Hook | When | Notes |
+|------|------|-------|
+| `onInstall` | After `skill install` | Use for dependency setup (e.g., `npm install`) |
+| `onActivate` | After `skill activate` | Use for runtime verification (e.g., `node --version`) |
+| `onUninstall` | Before `skill uninstall` | Use for cleanup |
+
+Hook failure warns the user but does not roll back the operation.
+
+### Migrating from v0.1.0
+
+```bash
+skill migrate --path my-skill/
+```
+
+This converts `content` → `files` + skill entrypoints, and `contract` → `skills` map. Review the output and adjust as needed.
 
 ### Write the skill body
 

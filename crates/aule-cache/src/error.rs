@@ -13,4 +13,10 @@ pub enum CacheError {
 
     #[error("Home directory not found")]
     HomeDirNotFound,
+
+    #[error("Hook script not found: {0}")]
+    HookNotFound(String),
+
+    #[error("Hook execution failed: {0}")]
+    HookExecution(String),
 }

@@ -55,6 +55,60 @@ export interface Manifest {
   extensions?: Record<string, unknown>;
 }
 
+// --- v0.2.0 Types ---
+
+export interface SkillDefinition {
+  description: string;
+  entrypoint: string;
+  version: string;
+  inputs?: unknown;
+  outputs?: unknown;
+  permissions?: string[];
+  determinism?: "deterministic" | "bounded" | "probabilistic";
+  errors?: Array<{ code: string; description: string }>;
+  behavior?: {
+    latencyClass?: "fast" | "moderate" | "slow";
+    costClass?: "free" | "low" | "medium" | "high";
+    sideEffects?: boolean;
+  };
+  commands?: Record<string, string>;
+}
+
+export interface Tool {
+  description: string;
+  using: string;
+  version?: string;
+  entrypoint: string;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+}
+
+export interface Hooks {
+  onInstall?: string;
+  onActivate?: string;
+  onUninstall?: string;
+}
+
+export interface ManifestV2 {
+  schemaVersion: string;
+  name: string;
+  description: string;
+  version: string;
+  files: string[];
+  skills: Record<string, SkillDefinition>;
+  tools?: Record<string, Tool>;
+  hooks?: Hooks;
+  identity?: string;
+  adapters: Record<string, AdapterConfig>;
+  dependencies?: Dependencies;
+  metadata?: ManifestMetadata;
+  extensions?: Record<string, unknown>;
+}
+
+export type ManifestAny =
+  | { version: "0.1.0"; manifest: Manifest }
+  | { version: "0.2.0"; manifest: ManifestV2 };
+
 // --- Errors ---
 
 export class ManifestParseError extends Error {
@@ -355,4 +409,229 @@ export function validateManifest(manifest: Manifest): ManifestValidationResult {
     errors,
     warnings,
   };
+}
+
+// --- v0.2.0 Parsing ---
+
+/**
+ * Parse a v0.2.0 manifest from raw YAML object.
+ */
+function parseManifestV2(obj: Record<string, unknown>): ManifestV2 {
+  if (typeof obj.name !== "string") throw new ManifestParseError("name is required");
+  if (typeof obj.description !== "string") throw new ManifestParseError("description is required");
+  if (typeof obj.version !== "string") throw new ManifestParseError("version is required");
+  if (!Array.isArray(obj.files)) throw new ManifestParseError("files is required and must be an array");
+  if (typeof obj.skills !== "object" || obj.skills === null || Array.isArray(obj.skills)) {
+    throw new ManifestParseError("skills is required and must be an object");
+  }
+
+  const skills: Record<string, SkillDefinition> = {};
+  for (const [name, raw] of Object.entries(obj.skills as Record<string, unknown>)) {
+    if (typeof raw !== "object" || raw === null) {
+      throw new ManifestParseError(`skills.${name} must be an object`);
+    }
+    const s = raw as Record<string, unknown>;
+    if (typeof s.description !== "string") throw new ManifestParseError(`skills.${name}.description is required`);
+    if (typeof s.entrypoint !== "string") throw new ManifestParseError(`skills.${name}.entrypoint is required`);
+    if (typeof s.version !== "string") throw new ManifestParseError(`skills.${name}.version is required`);
+
+    skills[name] = {
+      description: s.description,
+      entrypoint: s.entrypoint,
+      version: s.version,
+      inputs: s.inputs,
+      outputs: s.outputs,
+      permissions: Array.isArray(s.permissions) ? s.permissions.map(String) : undefined,
+      determinism: typeof s.determinism === "string" ? s.determinism as SkillDefinition["determinism"] : undefined,
+      errors: Array.isArray(s.errors) ? s.errors as SkillDefinition["errors"] : undefined,
+      behavior: typeof s.behavior === "object" ? s.behavior as SkillDefinition["behavior"] : undefined,
+      commands: typeof s.commands === "object" && s.commands !== null
+        ? s.commands as Record<string, string>
+        : undefined,
+    };
+  }
+
+  let tools: Record<string, Tool> | undefined;
+  if (obj.tools !== undefined && obj.tools !== null) {
+    if (typeof obj.tools !== "object" || Array.isArray(obj.tools)) {
+      throw new ManifestParseError("tools must be an object");
+    }
+    tools = {};
+    for (const [name, raw] of Object.entries(obj.tools as Record<string, unknown>)) {
+      if (typeof raw !== "object" || raw === null) {
+        throw new ManifestParseError(`tools.${name} must be an object`);
+      }
+      const t = raw as Record<string, unknown>;
+      if (typeof t.description !== "string") throw new ManifestParseError(`tools.${name}.description is required`);
+      if (typeof t.using !== "string") throw new ManifestParseError(`tools.${name}.using is required`);
+      if (typeof t.entrypoint !== "string") throw new ManifestParseError(`tools.${name}.entrypoint is required`);
+
+      tools[name] = {
+        description: t.description,
+        using: t.using,
+        version: typeof t.version === "string" ? t.version : undefined,
+        entrypoint: t.entrypoint,
+        input: typeof t.input === "object" && t.input !== null ? t.input as Record<string, unknown> : undefined,
+        output: typeof t.output === "object" && t.output !== null ? t.output as Record<string, unknown> : undefined,
+      };
+    }
+  }
+
+  let hooks: Hooks | undefined;
+  if (obj.hooks !== undefined && obj.hooks !== null) {
+    if (typeof obj.hooks !== "object" || Array.isArray(obj.hooks)) {
+      throw new ManifestParseError("hooks must be an object");
+    }
+    const h = obj.hooks as Record<string, unknown>;
+    hooks = {
+      onInstall: typeof h.onInstall === "string" ? h.onInstall : undefined,
+      onActivate: typeof h.onActivate === "string" ? h.onActivate : undefined,
+      onUninstall: typeof h.onUninstall === "string" ? h.onUninstall : undefined,
+    };
+  }
+
+  return {
+    schemaVersion: String(obj.schemaVersion),
+    name: obj.name,
+    description: obj.description,
+    version: obj.version,
+    files: obj.files.map(String),
+    skills,
+    tools,
+    hooks,
+    identity: typeof obj.identity === "string" ? obj.identity : undefined,
+    adapters: parseAdapters(obj.adapters),
+    dependencies: parseDependencies(obj.dependencies),
+    metadata: parseMetadata(obj.metadata),
+    extensions:
+      typeof obj.extensions === "object" && obj.extensions !== null && !Array.isArray(obj.extensions)
+        ? (obj.extensions as Record<string, unknown>)
+        : undefined,
+  };
+}
+
+/**
+ * Parse a manifest of any schema version (v0.1.0 or v0.2.0).
+ */
+export function parseManifestAny(yamlString: string): ManifestAny {
+  let raw: unknown;
+  try {
+    raw = YAML.parse(yamlString);
+  } catch (err) {
+    throw new ManifestParseError(
+      `YAML parse error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ManifestParseError("manifest must be a YAML mapping");
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const schemaVersion = typeof obj.schemaVersion === "string" ? obj.schemaVersion : "0.1.0";
+
+  switch (schemaVersion) {
+    case "0.1.0":
+      return { version: "0.1.0", manifest: parseManifest(yamlString) };
+    case "0.2.0":
+      if ("content" in obj) {
+        throw new ManifestParseError(
+          "v0.2.0 manifests must not contain 'content' — use 'files' and skill entrypoints instead"
+        );
+      }
+      if ("contract" in obj) {
+        throw new ManifestParseError(
+          "v0.2.0 manifests must not contain 'contract' — use 'skills' instead"
+        );
+      }
+      return { version: "0.2.0", manifest: parseManifestV2(obj) };
+    default:
+      throw new ManifestParseError(
+        `unsupported schemaVersion "${schemaVersion}": supported versions are "0.1.0" and "0.2.0"`
+      );
+  }
+}
+
+// --- v0.2.0 Validation ---
+
+const KNOWN_RUNTIMES = new Set(["node", "python", "shell"]);
+
+/**
+ * Validate a v0.2.0 manifest.
+ */
+export function validateManifestV2(manifest: ManifestV2): ManifestValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (manifest.schemaVersion !== "0.2.0") {
+    errors.push(`schemaVersion must be "0.2.0", got "${manifest.schemaVersion}"`);
+  }
+
+  if (manifest.name.length === 0 || manifest.name.length > 100) {
+    errors.push("name must be 1-100 characters");
+  } else if (!isKebabCase(manifest.name)) {
+    errors.push(`name must be kebab-case, got "${manifest.name}"`);
+  }
+
+  if (manifest.description.length === 0 || manifest.description.length > 500) {
+    errors.push("description must be 1-500 characters");
+  }
+
+  if (!isSemver(manifest.version)) {
+    errors.push(`version must be valid semver, got "${manifest.version}"`);
+  }
+
+  if (manifest.files.length === 0) {
+    warnings.push("files list is empty — the package bundles no files");
+  }
+
+  if (Object.keys(manifest.skills).length === 0) {
+    errors.push("skills map must contain at least one skill");
+  }
+
+  for (const [name, skill] of Object.entries(manifest.skills)) {
+    if (!isKebabCase(name)) {
+      errors.push(`skill name must be kebab-case, got "${name}"`);
+    }
+    if (!isSemver(skill.version)) {
+      errors.push(`skills.${name}.version must be valid semver, got "${skill.version}"`);
+    }
+  }
+
+  if (manifest.tools) {
+    for (const [name, tool] of Object.entries(manifest.tools)) {
+      if (!isKebabCase(name)) {
+        errors.push(`tool name must be kebab-case, got "${name}"`);
+      }
+      if (!KNOWN_RUNTIMES.has(tool.using)) {
+        warnings.push(`tools.${name}: unknown runtime "${tool.using}"`);
+      }
+    }
+  }
+
+  if (manifest.identity !== undefined && !isValidIdentity(manifest.identity)) {
+    errors.push(`identity must be a valid domain/path string, got "${manifest.identity}"`);
+  }
+
+  if (manifest.metadata?.tags && manifest.metadata.tags.length > 10) {
+    errors.push(`tags must have at most 10 entries, got ${manifest.metadata.tags.length}`);
+  }
+
+  for (const target of Object.keys(manifest.adapters)) {
+    if (!KNOWN_ADAPTER_TARGETS.has(target)) {
+      warnings.push(`unknown adapter target "${target}", will be skipped`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+/**
+ * Validate any manifest version.
+ */
+export function validateManifestAny(manifestAny: ManifestAny): ManifestValidationResult {
+  if (manifestAny.version === "0.1.0") {
+    return validateManifest(manifestAny.manifest);
+  }
+  return validateManifestV2(manifestAny.manifest);
 }

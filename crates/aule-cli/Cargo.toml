@@ -16,6 +16,7 @@ aule-cache = { path = "../aule-cache" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 ureq = { version = "2", features = ["json"] }
 open = "5"

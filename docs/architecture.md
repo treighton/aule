@@ -22,33 +22,37 @@ The foundation. Defines all protocol types and validation logic.
 
 **Key types:**
 
-- `Manifest` — parsed representation of `skill.yaml`
-- `Contract` — versioned interface declaration (inputs, outputs, permissions, determinism)
+- `Manifest` — v0.1.0 parsed representation of `skill.yaml`
+- `ManifestV2` — v0.2.0 parsed representation (multi-skill, tools, hooks)
+- `ManifestAny` — version-dispatched enum: `V1(Manifest)` | `V2(ManifestV2)`
+- `SkillDefinition` — per-skill interface in v0.2.0 (entrypoint, permissions, determinism, I/O)
+- `Tool` — executable tool declaration (runtime, entrypoint, typed input/output)
+- `Hooks` — lifecycle scripts (onInstall, onActivate, onUninstall)
+- `Contract` — versioned interface declaration (v0.1.0 only)
 - `Permission` — capability requirement with scope (e.g., `filesystem.read`, `process.spawn`)
 - `RequestEnvelope` / `ResponseEnvelope` — invocation protocol for structured skill calls
-- `Metadata` — author, license, version, generation info
 
 **Validation pipeline:**
 
 ```
 Raw YAML string
-  → serde_yaml::from_str::<Manifest>()
-  → validate_schema_version()        must be "0.1.0"
-  → validate_name()                  alphanumeric + hyphens
-  → validate_version()               semantic version
-  → validate_contract()
-      → validate_permissions()       against known vocabulary
-      → validate_inputs/outputs()    "prompt" or valid JSON Schema
-      → validate_determinism()       deterministic | bounded | probabilistic
-  → validate_adapters()              known runtime targets
-  → Ok(Manifest)
+  → parse_manifest_any()             two-phase: peek schemaVersion, then deserialize
+  ├── v0.1.0:
+  │     → serde_yaml::from_str::<Manifest>()
+  │     → validate_manifest()        name, version, contract, content paths
+  │     → validate_contract()        permissions, inputs/outputs, determinism
+  └── v0.2.0:
+        → reject if 'content' or 'contract' present
+        → serde_yaml::from_str::<ManifestV2>()
+        → validate_manifest_v2()     skills, tools, hooks, files, permissions
+  → Ok(ManifestAny)
 ```
 
 **Design decisions:**
 
 - Permissions use a flat `scope.action` vocabulary rather than hierarchical namespaces. This keeps policy matching simple and avoids ambiguity.
 - The envelope types (`RequestEnvelope`, `ResponseEnvelope`) support both prompt-based and JSON Schema-based contracts. Most skills use `"prompt"` — structured contracts are for machine-to-machine skill composition.
-- Schema version is pinned to `"0.1.0"` during the protocol stabilization phase.
+- Schema version routing uses two-phase parsing (peek at `schemaVersion` from a `serde_yaml::Value`, then deserialize the correct struct) for precise error messages rather than serde's untagged enum approach.
 
 ### aule-adapter
 
@@ -59,17 +63,36 @@ Generates runtime-specific output files from a manifest and skill content.
 - `RuntimeTarget` — defines the output layout for a specific agent (directory structure, frontmatter mapping)
 - `GeneratedFile` — a path + content pair produced by the generator
 
-**Generation flow:**
+**Generation flow (v0.1.0):**
 
 ```
 (Manifest, skill_content: &str, RuntimeTarget) → Vec<GeneratedFile>
 ```
 
 1. Read the manifest and resolve content paths
-2. Build YAML frontmatter for the target runtime (name, description, license, metadata, compatibility)
+2. Build YAML frontmatter for the target runtime
 3. Append the skill body unchanged (byte-identical passthrough)
-4. If commands are defined, generate one file per command in the target's command directory
+4. If commands are defined, generate one file per command
 5. Return the list of generated files
+
+**Generation flow (v0.2.0):**
+
+```
+(ManifestV2, base_path, RuntimeTarget) → Vec<GeneratedFile>
+```
+
+1. Resolve file globs from `files` list (deduplicated)
+2. For each skill in the `skills` map:
+   a. Read the skill's entrypoint content
+   b. Build frontmatter from skill definition (not manifest-level)
+   c. Append skill body
+   d. If tools exist, append `## Tools` documentation section
+   e. Copy all included files into the skill output directory
+   f. Generate wrapper scripts for each tool (`tools/<name>`)
+   g. Generate command files (if the skill declares commands)
+3. Mark wrapper scripts executable (chmod +x)
+
+The unified entry point `generate_any()` dispatches to the correct path based on `ManifestAny`.
 
 **Runtime targets currently defined:**
 
@@ -155,6 +178,11 @@ Manages the local `~/.skills/` directory: artifact storage, metadata indexing, a
 | `verify()` | Checks SHA-256 hashes against stored `.integrity` files |
 | `list_installed()` | Reads metadata index |
 | `list_active()` | Reads activation state for a runtime |
+| `execute_hook()` | Runs a lifecycle hook script with the package directory as working dir |
+
+**Lifecycle hooks (v0.2.0):**
+
+When installing or activating a v0.2.0 package, the CLI checks for declared hooks and runs them via `execute_hook()`. Hook failure is reported but does not roll back the operation. The `onUninstall` hook runs before file removal.
 
 **Integrity model:**
 
@@ -175,10 +203,11 @@ src/
 ├── main.rs          CLI definition (clap derive)
 ├── commands/
 │   ├── init.rs      Scaffold new skill package
-│   ├── validate.rs  Validate manifest and contract
-│   ├── build.rs     Generate adapter output
-│   ├── install.rs   Install from any source
-│   ├── activate.rs  Bind skill to runtime
+│   ├── validate.rs  Validate manifest and contract (v0.1.0 + v0.2.0)
+│   ├── build.rs     Generate adapter output (v0.1.0 + v0.2.0)
+│   ├── migrate.rs   Convert v0.1.0 manifest to v0.2.0
+│   ├── install.rs   Install from any source (runs onInstall hook)
+│   ├── activate.rs  Bind skill to runtime (runs onActivate hook)
 │   ├── list.rs      List installed/active skills
 │   ├── login.rs     GitHub OAuth flow
 │   ├── logout.rs    Remove auth token
@@ -258,13 +287,14 @@ The adapter system is designed to make this straightforward. Most of the work is
 ## Testing Strategy
 
 ```
-aule-schema     36 tests   Unit: parsing, validation, edge cases
-aule-adapter     8 tests   Unit + integration: generation, real skill validation
+aule-schema     48 tests   Unit: parsing (v0.1.0 + v0.2.0), validation, edge cases
+aule-adapter    23 tests   Unit + integration: v0.1.0 generation, v0.2.0 generation,
+                            wrapper scripts, tool docs, file copying, real skill validation
 aule-resolver   18 tests   Unit: resolution from each source, policy enforcement
-aule-cache      17 tests   Unit: install, activate, integrity, index operations
+aule-cache      20 tests   Unit: install, activate, integrity, hooks, index operations
 aule-cli        14 tests   Integration: end-to-end CLI tests with temp directories
                 ──────
-                ~97 total
+                ~122 total
 ```
 
-The critical test is `real_skills_test.rs` in `aule-adapter`. It generates adapter output for all four included skills and asserts byte-for-byte equality with the committed output in `.claude/` and `.codex/`. This catches any unintended changes to the generation pipeline.
+The critical test is `real_skills_test.rs` in `aule-adapter`. It generates adapter output for all example skills (six v0.1.0, one v0.2.0) and asserts byte-for-byte equality with the committed output in `.claude/` and `.codex/`. The v0.2.0 test also verifies wrapper scripts, `## Tools` sections, and included file copying.

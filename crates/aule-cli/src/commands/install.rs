@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
-use aule_cache::{CacheManager, MetadataIndex, IndexEntry, UserConfig, install_artifact};
+use aule_cache::{CacheManager, MetadataIndex, IndexEntry, UserConfig, install_artifact, execute_hook};
 use aule_resolver::{ResolveRequest, resolve_from_path, resolve_from_git, is_git_url, ArtifactSource};
+use aule_schema::manifest::{load_manifest_any, ManifestAny};
 
 use super::CliError;
 use crate::output;
@@ -229,6 +230,44 @@ fn install_plan(
 
     index.save(&mgr)
         .map_err(|e| CliError::Internal(e.to_string()))?;
+
+    // Run onInstall hook if present (v0.2.0 manifests)
+    let manifest_file = artifact_path.join("skill.yaml");
+    if manifest_file.exists() {
+        if let Ok(manifest_any) = load_manifest_any(&manifest_file) {
+            if let ManifestAny::V2(ref m) = manifest_any {
+                if let Some(ref hooks) = m.hooks {
+                    if let Some(ref on_install) = hooks.on_install {
+                        let hook_path = artifact_path.join(on_install);
+                        if !json {
+                            println!("Running onInstall hook...");
+                        }
+                        match execute_hook(&hook_path, artifact_path) {
+                            Ok(result) => {
+                                if result.success {
+                                    if !json {
+                                        println!("  onInstall hook completed successfully.");
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "warning: onInstall hook failed (exit {})",
+                                        result.exit_code.map_or("unknown".to_string(), |c| c.to_string())
+                                    );
+                                    if !result.stderr.is_empty() {
+                                        eprintln!("  {}", result.stderr.trim());
+                                    }
+                                    eprintln!("  The package may not function correctly.");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("warning: could not run onInstall hook: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if json {
         let value = serde_json::json!({

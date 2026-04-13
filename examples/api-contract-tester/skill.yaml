@@ -1,0 +1,164 @@
+schemaVersion: "0.2.0"
+name: "api-contract-tester"
+description: "Generate, execute, and diagnose API contract tests from OpenAPI specs"
+version: "1.0.0"
+
+files:
+  - "content/**"
+  - "logic/**"
+
+skills:
+  contract-tester:
+    description: "Generate and run API contract tests with agentic diagnosis"
+    entrypoint: "content/contract-tester.md"
+    version: "1.0.0"
+    inputs:
+      type: "object"
+      properties:
+        specPath:
+          type: "string"
+          description: "Path to the OpenAPI spec file"
+        baseUrl:
+          type: "string"
+          description: "Base URL of the API under test"
+      required: ["specPath", "baseUrl"]
+    outputs:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+        passedCount:
+          type: "integer"
+        failedCount:
+          type: "integer"
+        report:
+          type: "string"
+    permissions:
+      - "filesystem.read"
+      - "filesystem.write"
+      - "process.spawn"
+      - "network.external"
+    determinism: "bounded"
+    errors:
+      - code: "SPEC_NOT_FOUND"
+        description: "The OpenAPI spec file was not found at the given path"
+      - code: "API_UNREACHABLE"
+        description: "The API base URL is not reachable"
+    commands:
+      test-api: "content/commands/test-api.md"
+
+  spec-linter:
+    description: "Validate an OpenAPI spec for completeness and correctness"
+    entrypoint: "content/spec-linter.md"
+    version: "1.0.0"
+    inputs:
+      type: "object"
+      properties:
+        specPath:
+          type: "string"
+          description: "Path to the OpenAPI spec file"
+      required: ["specPath"]
+    outputs: "prompt"
+    permissions:
+      - "filesystem.read"
+    determinism: "deterministic"
+
+tools:
+  generate:
+    description: "Generate test harness from an OpenAPI spec"
+    using: "node"
+    version: ">= 18"
+    entrypoint: "logic/tools/generate.ts"
+    input:
+      type: "object"
+      properties:
+        specPath:
+          type: "string"
+          description: "Path to the OpenAPI spec file"
+        outputDir:
+          type: "string"
+          description: "Directory to write generated test files"
+      required: ["specPath"]
+    output:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+        testCount:
+          type: "integer"
+        files:
+          type: "array"
+          items:
+            type: "string"
+
+  run-tests:
+    description: "Execute generated contract tests against a live API"
+    using: "node"
+    version: ">= 18"
+    entrypoint: "logic/tools/run-tests.ts"
+    input:
+      type: "object"
+      properties:
+        testDir:
+          type: "string"
+          description: "Directory containing generated test files"
+        baseUrl:
+          type: "string"
+          description: "Base URL of the API under test"
+      required: ["baseUrl"]
+    output:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+        passed:
+          type: "integer"
+        failed:
+          type: "integer"
+        results:
+          type: "array"
+
+  report:
+    description: "Aggregate test results into a summary report"
+    using: "node"
+    entrypoint: "logic/tools/report.ts"
+    input:
+      type: "object"
+      properties:
+        results:
+          type: "array"
+          description: "Array of test result objects"
+      required: ["results"]
+    output:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+        summary:
+          type: "string"
+        passRate:
+          type: "number"
+
+hooks:
+  onInstall: "logic/hooks/setup.sh"
+  onActivate: "logic/hooks/verify-runtime.sh"
+
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+
+metadata:
+  author: "aule"
+  license: "MIT"
+  tags:
+    - "api"
+    - "testing"
+    - "openapi"
+    - "contract-testing"
+
+dependencies:
+  tools:
+    - name: "node"
+      version: ">= 18"

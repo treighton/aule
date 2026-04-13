@@ -92,6 +92,12 @@ enum Commands {
         #[arg(long = "ref")]
         git_ref: Option<String>,
     },
+    /// Migrate a v0.1.0 manifest to v0.2.0 format
+    Migrate {
+        /// Path to the skill directory (default: current directory)
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
     /// Search the skill registry
     Search {
         /// Search query
@@ -132,6 +138,7 @@ fn main() {
         Commands::Publish { path, git_ref } => {
             commands::publish::run(path, git_ref, json_output)
         }
+        Commands::Migrate { path } => commands::migrate::run(path, json_output),
         Commands::Search {
             query,
             runtime,

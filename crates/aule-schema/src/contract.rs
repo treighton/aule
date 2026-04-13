@@ -49,7 +49,7 @@ pub enum Determinism {
     Probabilistic,
 }
 
-fn default_determinism() -> Determinism {
+pub fn default_determinism() -> Determinism {
     Determinism::Probabilistic
 }
 
