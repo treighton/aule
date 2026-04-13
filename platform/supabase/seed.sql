@@ -7,7 +7,7 @@
 INSERT INTO publishers (id, github_username, github_id, display_name, avatar_url, bio)
 VALUES (
   '00000000-0000-0000-0000-000000000001',
-  'treightonmauldin',
+  'treighton',
   1,
   'Treighton Mauldin',
   'https://github.com/treightonmauldin.png',
