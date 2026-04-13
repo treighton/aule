@@ -1,18 +1,20 @@
-# Aule
+# Aulë
 
 **An open, runtime-agnostic skill ecosystem for AI coding agents.**
 
-Aule is a protocol and toolchain for discoverable, versioned, composable skills — reusable capabilities that any AI coding agent can consume. Think Go Modules meets npm, but for agent skills.
+Named after [Aulë the Smith](https://tolkiengateway.net/wiki/Aul%C3%AB) — the Vala of craftsmanship in Tolkien's legendarium, master of all crafts and forger of the substance of the world. As Aulë shaped the matter of Arda, this project shapes the building blocks for AI agents.
+
+Aulë is a protocol and toolchain for discoverable, versioned, composable skills — reusable capabilities that any AI coding agent can consume. Think Go Modules meets npm, but for agent skills.
 
 Write a skill once. Publish it. Any compatible agent — Claude Code, Codex, or others — can install and use it without modification.
 
 ---
 
-## Why Aule?
+## Why Aulë?
 
 AI coding agents are powerful, but their skills are siloed. A prompt workflow that works in Claude Code doesn't transfer to Codex. There's no way to version, share, or discover what others have built.
 
-Aule fixes this with:
+Aulë fixes this with:
 
 - **A standard manifest format** (`skill.yaml`) — declare what your skill does, what it needs, and how it behaves
 - **Runtime adapters** — one skill source generates output for Claude Code, Codex, and future agents
@@ -173,7 +175,7 @@ Skills must declare the capabilities they need. Users can enforce policies that 
 
 ## Architecture
 
-Aule is a Cargo workspace with five crates. Library crates do the work; the CLI is a thin wrapper.
+Aulë is a Cargo workspace with five crates. Library crates do the work; the CLI is a thin wrapper.
 
 ```
 aule-cli (binary: `skill`)

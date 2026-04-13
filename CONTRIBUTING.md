@@ -1,6 +1,6 @@
-# Contributing to Aule
+# Contributing to Aulë
 
-Thank you for your interest in contributing to Aule. This document explains how to get set up, how the project is organized, and how to submit changes.
+Thank you for your interest in contributing to Aulë. This document explains how to get set up, how the project is organized, and how to submit changes.
 
 ## Getting Started
 

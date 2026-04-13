@@ -1,6 +1,6 @@
 # Authoring Skills
 
-This guide walks through creating, testing, and publishing a skill for Aule.
+This guide walks through creating, testing, and publishing a skill for Aulë.
 
 ## What Is a Skill?
 

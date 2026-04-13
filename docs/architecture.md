@@ -1,10 +1,10 @@
 # Architecture
 
-This document describes Aule's internal architecture for contributors and anyone integrating with the protocol.
+This document describes Aulë's internal architecture for contributors and anyone integrating with the protocol.
 
 ## Overview
 
-Aule is a Cargo workspace with five crates organized as a library-first design. The CLI binary (`skill`) is a thin wrapper — all logic lives in the library crates.
+Aulë is a Cargo workspace with five crates organized as a library-first design. The CLI binary (`skill`) is a thin wrapper — all logic lives in the library crates.
 
 ```
 aule-cli (binary)

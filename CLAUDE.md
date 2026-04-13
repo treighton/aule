@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Aule** is an open, runtime-agnostic skill ecosystem — a protocol and toolchain for discoverable, versioned, composable agent/coding skills. Think Go Modules + npm + OpenAPI + VS Code Extensions for AI agent capabilities.
+**Aulë** is an open, runtime-agnostic skill ecosystem — a protocol and toolchain for discoverable, versioned, composable agent/coding skills. Think Go Modules + npm + OpenAPI + VS Code Extensions for AI agent capabilities.
 
 ## Build & Test Commands
 
