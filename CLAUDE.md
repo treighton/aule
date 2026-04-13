@@ -27,7 +27,7 @@ crates/
   aule-resolver/   — Skill resolution: local path, cache, git URL, semver constraints
   aule-cache/      — Local ~/.skills/ cache: artifacts, metadata index, activation state
   aule-cli/        — `skill` binary: init, validate, build, install, activate, list
-skills/            — Skill source packages (manifest + content) for the 4 OpenSpec skills
+examples/          — Example skill packages demonstrating the skill format and CLI usage
 openspec/          — OpenSpec change management artifacts (proposal, design, specs, tasks)
 .claude/, .codex/  — Generated adapter output for Claude Code and Codex runtimes
 ```
@@ -48,7 +48,7 @@ aule-cli (binary)
 
 **Key design choice:** Adapter output is template + transform, not codegen. The skill body passes through byte-identical; only frontmatter is mapped per-runtime.
 
-**Validation gate:** `crates/aule-adapter/tests/real_skills_test.rs` generates all 4 OpenSpec skills and asserts output matches the existing hand-written adapter files.
+**Validation gate:** `crates/aule-adapter/tests/real_skills_test.rs` generates all example skills and asserts output matches the existing hand-written adapter files.
 
 ## OpenSpec Workflow
 

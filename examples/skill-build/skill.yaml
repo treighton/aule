@@ -1,0 +1,23 @@
+schemaVersion: "0.1.0"
+name: "skill-build"
+description: "Build adapter output for a skill targeting one or more runtimes. Use when generating runtime-specific SKILL.md files from a skill package."
+version: "1.0.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions: []
+  determinism: "deterministic"
+dependencies:
+  tools:
+    - name: "skill"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"

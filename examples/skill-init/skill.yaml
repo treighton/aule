@@ -1,0 +1,20 @@
+schemaVersion: "0.1.0"
+name: "skill-init"
+description: "Initialize a new skill package with scaffolded directory structure and manifest. Use when starting a new skill from scratch."
+version: "1.0.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions: []
+  determinism: "deterministic"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"

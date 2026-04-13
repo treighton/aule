@@ -1,4 +1,4 @@
-use aule_adapter::{generate, GenerateOptions, RuntimeTarget};
+use aule_adapter::{generate, GenerateOptions};
 use aule_schema::manifest::parse_manifest;
 use std::fs;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ fn repo_root() -> PathBuf {
 
 fn generate_and_compare(skill_name: &str) {
     let root = repo_root();
-    let skill_src = root.join("skills").join(skill_name);
+    let skill_src = root.join("examples").join(skill_name);
     let manifest_yaml = fs::read_to_string(skill_src.join("skill.yaml"))
         .unwrap_or_else(|e| panic!("Failed to read skill.yaml for {}: {}", skill_name, e));
 
@@ -86,21 +86,31 @@ fn generate_and_compare(skill_name: &str) {
 }
 
 #[test]
-fn openspec_explore_matches() {
-    generate_and_compare("openspec-explore");
+fn skill_init_matches() {
+    generate_and_compare("skill-init");
 }
 
 #[test]
-fn openspec_propose_matches() {
-    generate_and_compare("openspec-propose");
+fn skill_validate_matches() {
+    generate_and_compare("skill-validate");
 }
 
 #[test]
-fn openspec_apply_change_matches() {
-    generate_and_compare("openspec-apply-change");
+fn skill_build_matches() {
+    generate_and_compare("skill-build");
 }
 
 #[test]
-fn openspec_archive_change_matches() {
-    generate_and_compare("openspec-archive-change");
+fn skill_publish_matches() {
+    generate_and_compare("skill-publish");
+}
+
+#[test]
+fn skill_develop_matches() {
+    generate_and_compare("skill-develop");
+}
+
+#[test]
+fn skill_scout_matches() {
+    generate_and_compare("skill-scout");
 }

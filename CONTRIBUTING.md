@@ -30,7 +30,7 @@ crates/
   aule-resolver/     Multi-source version resolution
   aule-cache/        Local cache and activation state
   aule-cli/          CLI binary (thin wrapper)
-skills/              Example skill packages
+examples/            Example skill packages
 platform/            Registry web app (Next.js + Supabase)
 docs/                Documentation
 ```
@@ -91,15 +91,15 @@ Each crate has its own tests:
 
 ### The validation gate
 
-The most important test is `crates/aule-adapter/tests/real_skills_test.rs`. It generates adapter output for all four included skills and asserts byte-for-byte equality with the committed files in `.claude/` and `.codex/`.
+The most important test is `crates/aule-adapter/tests/real_skills_test.rs`. It generates adapter output for all example skills and asserts byte-for-byte equality with the committed files in `.claude/` and `.codex/`.
 
 If you change adapter generation logic, update the reference files:
 
 ```bash
 # Regenerate reference output
-cargo run -p aule-cli -- build --path skills/openspec-explore/ --target claude-code
-cargo run -p aule-cli -- build --path skills/openspec-explore/ --target codex
-# Repeat for all four skills, then commit the updated output
+cargo run -p aule-cli -- build --path examples/skill-init/ --target claude-code
+cargo run -p aule-cli -- build --path examples/skill-init/ --target codex
+# Repeat for all example skills, then commit the updated output
 ```
 
 ### Writing tests

@@ -1,0 +1,20 @@
+schemaVersion: "0.1.0"
+name: "skill-validate"
+description: "Validate a skill package against the manifest schema. Use when checking a skill for correctness before building or publishing."
+version: "1.0.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions: []
+  determinism: "deterministic"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"

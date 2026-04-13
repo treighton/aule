@@ -1,0 +1,31 @@
+schemaVersion: "0.1.0"
+name: "skill-develop"
+description: "Full skill development workflow — research, plan, implement, and validate a new skill. Composes the simple CLI wrapper skills into an iterative loop. Use when creating a complete skill from scratch."
+version: "1.0.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions:
+    - "filesystem.read"
+    - "filesystem.write"
+    - "process.spawn"
+  determinism: "probabilistic"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"
+dependencies:
+  tools:
+    - name: "skill"
+  skills:
+    - name: "skill-init"
+    - name: "skill-validate"
+    - name: "skill-build"
+    - name: "skill-publish"

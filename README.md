@@ -279,13 +279,13 @@ cargo test -p aule-schema  # Test a single crate
 
 ```bash
 cargo run -p aule-cli -- init --name test-skill
-cargo run -p aule-cli -- validate --path skills/openspec-explore/
-cargo run -p aule-cli -- build --path skills/openspec-explore/ --target claude-code
+cargo run -p aule-cli -- validate --path examples/skill-init/
+cargo run -p aule-cli -- build --path examples/skill-init/ --target claude-code
 ```
 
 ### Validation gate
 
-The real skill validation test generates adapter output for all four included skills and asserts the output matches the hand-written files in `.claude/` and `.codex/`:
+The real skill validation test generates adapter output for all example skills and asserts the output matches the hand-written files in `.claude/` and `.codex/`:
 
 ```bash
 cargo test -p aule-adapter --test real_skills_test
@@ -304,11 +304,13 @@ aule/
 │   ├── aule-resolver/     # Version resolution (local, git, registry)
 │   ├── aule-cache/        # Local cache and activation
 │   └── aule-cli/          # CLI binary
-├── skills/                # Example skill packages
-│   ├── openspec-apply-change/
-│   ├── openspec-archive-change/
-│   ├── openspec-explore/
-│   └── openspec-propose/
+├── examples/              # Example skill packages
+│   ├── skill-init/
+│   ├── skill-validate/
+│   ├── skill-build/
+│   ├── skill-publish/
+│   ├── skill-develop/
+│   └── skill-scout/
 ├── platform/              # Registry web application (Next.js + Supabase)
 ├── .claude/skills/        # Generated Claude Code adapter output
 └── .codex/skills/         # Generated Codex adapter output
@@ -326,7 +328,7 @@ aule/
 - [x] Local cache with integrity verification (`~/.skills/`)
 - [x] CLI with full lifecycle: `init`, `validate`, `build`, `install`, `activate`, `list`
 - [x] Registry commands: `login`, `logout`, `publish`, `search`
-- [x] Four example skills (OpenSpec workflow)
+- [x] Six example skills demonstrating the skill format and CLI usage
 
 ### In Progress
 

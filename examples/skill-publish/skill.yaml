@@ -1,0 +1,24 @@
+schemaVersion: "0.1.0"
+name: "skill-publish"
+description: "Publish a skill to the registry. Use when ready to share a validated skill with the community."
+version: "1.0.0"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions:
+    - "process.spawn"
+  determinism: "bounded"
+dependencies:
+  tools:
+    - name: "skill"
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"

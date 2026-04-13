@@ -1,0 +1,47 @@
+schemaVersion: "0.1.0"
+name: "skill-scout"
+description: "Autonomously discover, evaluate, install, and run skills from the registry. Use when an agent needs a capability it doesn't have, or when the user asks to find skills for a task."
+version: "1.0.0"
+identity: "skills.aule.dev/skill-scout"
+content:
+  skill: "content/skill.md"
+contract:
+  version: "1.0.0"
+  inputs: "prompt"
+  outputs: "prompt"
+  permissions:
+    - "filesystem.read"
+    - "filesystem.write"
+    - "process.spawn"
+    - "network.external"
+  determinism: "probabilistic"
+  errors:
+    - code: "NO_RESULTS"
+      description: "No skills found matching the search query"
+    - code: "INSTALL_FAILED"
+      description: "Skill installation failed due to network, permission, or validation error"
+    - code: "ACTIVATION_FAILED"
+      description: "Skill activation failed for the target runtime"
+  behavior:
+    timeout_ms: 120000
+adapters:
+  claude-code:
+    enabled: true
+  codex:
+    enabled: true
+metadata:
+  author: "aule"
+  license: "MIT"
+  tags:
+    - "consumer"
+    - "discovery"
+    - "autonomous"
+    - "cli"
+  homepage: "https://github.com/treightonmauldin/aule"
+  repository: "https://github.com/treightonmauldin/aule"
+dependencies:
+  tools:
+    - name: "skill"
+extensions:
+  aule:
+    defaultGateMode: "supervised"
