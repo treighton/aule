@@ -14,6 +14,7 @@ export async function GET(
     .from("skills")
     .select(
       `
+      id,
       registry_name,
       name,
       description,
@@ -27,14 +28,14 @@ export async function GET(
       created_at,
       publisher:publishers(github_username, display_name, avatar_url, bio),
       latest_version:skill_versions(
+        id,
         version,
         manifest_snapshot,
         permissions,
         adapter_targets,
         commit_sha,
         created_at
-      ),
-      verification:verification_results(check_name, status, message)
+      )
     `
     )
     .eq("registry_name", registryName)
@@ -47,10 +48,19 @@ export async function GET(
 
   // Shape the response
   const ver = Array.isArray(skill.latest_version)
-    ? skill.latest_version[0]
-    : skill.latest_version;
+    ? (skill.latest_version[0] as Record<string, unknown>)
+    : (skill.latest_version as Record<string, unknown> | null);
 
-  const checks = (skill.verification as Array<Record<string, unknown>>) ?? [];
+  // Fetch verification separately via the skill_version id
+  let checks: Array<Record<string, unknown>> = [];
+  if (ver?.id) {
+    const { data: verChecks } = await supabase
+      .from("verification_results")
+      .select("check_name, status, message")
+      .eq("skill_version_id", ver.id as string);
+    checks = verChecks ?? [];
+  }
+
   const hasError = checks.some((c) => c.status === "error");
   const hasWarning = checks.some((c) => c.status === "warning");
 
@@ -61,12 +71,12 @@ export async function GET(
     publisher: skill.publisher,
     latest_version: ver
       ? {
-          version: (ver as Record<string, unknown>).version,
-          manifest: (ver as Record<string, unknown>).manifest_snapshot,
-          permissions: (ver as Record<string, unknown>).permissions,
-          adapter_targets: (ver as Record<string, unknown>).adapter_targets,
-          commit_sha: (ver as Record<string, unknown>).commit_sha,
-          created_at: (ver as Record<string, unknown>).created_at,
+          version: ver.version,
+          manifest: ver.manifest_snapshot,
+          permissions: ver.permissions,
+          adapter_targets: ver.adapter_targets,
+          commit_sha: ver.commit_sha,
+          created_at: ver.created_at,
         }
       : null,
     tags: skill.tags,

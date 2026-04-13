@@ -143,13 +143,15 @@ export async function POST(request: NextRequest) {
       last_indexed_at,
       created_at,
       publisher:publishers(github_username, display_name, avatar_url),
-      latest_version:skill_versions(version, adapter_targets, permissions, commit_sha, created_at),
-      verification:verification_results(check_name, status, message)
+      latest_version:skill_versions(version, adapter_targets, permissions, commit_sha, created_at)
     `
     )
     .eq("id", skill.id)
     .eq("skill_versions.is_latest", true)
     .single();
 
-  return NextResponse.json(fullSkill, { status: 201 });
+  return NextResponse.json({
+    ...fullSkill,
+    indexing: indexResult,
+  }, { status: 201 });
 }

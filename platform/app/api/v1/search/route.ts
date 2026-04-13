@@ -27,8 +27,7 @@ export async function GET(request: NextRequest) {
       last_indexed_at,
       created_at,
       publisher:publishers!inner(github_username, display_name, avatar_url),
-      latest_version:skill_versions!inner(version, adapter_targets),
-      verification:verification_results(check_name, status)
+      latest_version:skill_versions(version, adapter_targets)
     `,
       { count: "exact" }
     )
@@ -78,15 +77,6 @@ export async function GET(request: NextRequest) {
     const ver = Array.isArray(skill.latest_version)
       ? (skill.latest_version[0] as Record<string, unknown>)
       : (skill.latest_version as Record<string, unknown> | null);
-    const checks = (skill.verification as Array<Record<string, unknown>>) ?? [];
-
-    const checksPassed = checks.filter((c) => c.status === "pass").length;
-    const checksWarned = checks.filter((c) => c.status === "warning").length;
-    const checksFailed = checks.filter((c) => c.status === "error").length;
-
-    let verificationStatus = "pass";
-    if (checksFailed > 0) verificationStatus = "error";
-    else if (checksWarned > 0) verificationStatus = "warning";
 
     return {
       registry_name: skill.registry_name,
@@ -102,12 +92,6 @@ export async function GET(request: NextRequest) {
       version: ver?.version ?? null,
       tags: skill.tags,
       adapter_targets: ver?.adapter_targets ?? [],
-      verification_summary: {
-        status: verificationStatus,
-        checks_passed: checksPassed,
-        checks_warned: checksWarned,
-        checks_failed: checksFailed,
-      },
       repo_url: skill.repo_url,
       last_indexed_at: skill.last_indexed_at,
       created_at: skill.created_at,

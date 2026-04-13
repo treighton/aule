@@ -32,13 +32,13 @@ export async function POST(request: NextRequest) {
       skill_path,
       ref,
       latest_version:skill_versions!inner(
+        id,
         version,
         manifest_hash,
         adapter_targets,
         permissions,
         commit_sha
-      ),
-      verification:verification_results(status)
+      )
     `
     )
     .eq("registry_name", registryName)
@@ -65,10 +65,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Compute verification status
-  const checks = (skillRecord.verification as Array<Record<string, unknown>>) ?? [];
-  const hasError = checks.some((c) => c.status === "error");
-  const hasWarning = checks.some((c) => c.status === "warning");
+  // Fetch verification status separately
+  const { data: checks } = await supabase
+    .from("verification_results")
+    .select("status")
+    .eq("skill_version_id", version.id as string);
+  const hasError = (checks ?? []).some((c) => c.status === "error");
+  const hasWarning = (checks ?? []).some((c) => c.status === "warning");
   const verificationStatus = hasError ? "error" : hasWarning ? "warning" : "pass";
 
   return NextResponse.json({
