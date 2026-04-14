@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                     # Build all crates
-cargo test                      # Run all ~154 tests
+cargo test                      # Run all ~204 tests
 cargo test -p aule-schema       # Test one crate
 cargo test -p aule-adapter --test real_skills_test  # Run real skill validation
 cargo run -p aule-cli -- --help # Run the CLI
@@ -24,9 +24,10 @@ The binary is named `skill` (defined in `aule-cli/Cargo.toml`).
 crates/
   aule-schema/     — Protocol types: manifest (v0.1.0 + v0.2.0), contract, permissions, envelope, metadata
   aule-adapter/    — Pluggable adapter system: manifest → SKILL.md via config-based or script-based adapters
-  aule-resolver/   — Skill resolution: local path, cache, git URL, semver constraints
+  aule-resolver/   — Skill resolution: local path, cache, git URL, semver constraints (v0.1.0 + v0.2.0)
   aule-cache/      — Local ~/.skills/ cache: artifacts, metadata index, activation state, hook execution
-  aule-cli/        — `skill` binary: init, validate, build, migrate, install, activate, list, adapters
+  aule-infer/      — Skill inference: scanners, signal gatherers, LLM assessor, manifest builder
+  aule-cli/        — `skill` binary: init, validate, build, migrate, install, activate, list, infer, adapters
 examples/          — Example skill packages demonstrating the skill format and CLI usage
 openspec/          — OpenSpec change management artifacts (proposal, design, specs, tasks)
 .claude/, .codex/  — Generated adapter output for Claude Code and Codex runtimes
@@ -34,14 +35,15 @@ openspec/          — OpenSpec change management artifacts (proposal, design, s
 
 ## Architecture
 
-**Cargo workspace** with 5 crates. Library crates do the work; the CLI binary is a thin wrapper.
+**Cargo workspace** with 6 crates. Library crates do the work; the CLI binary is a thin wrapper.
 
 ```
 aule-cli (binary)
   ├── aule-schema    (manifest parsing, contract validation, permissions)
   ├── aule-adapter   (pluggable adapter system, generates SKILL.md per adapter)
   ├── aule-resolver  (version resolution, policy checks, git clone)
-  └── aule-cache     (artifact storage, activation state)
+  ├── aule-cache     (artifact storage, activation state)
+  └── aule-infer     (skill inference: scanners, signal gatherers, LLM assessor, manifest builder)
 ```
 
 **Skill source format:**
@@ -78,5 +80,10 @@ Changes live in `openspec/changes/<name>/` with: `proposal.md`, `design.md`, `sp
   - **Script-based** (`AdapterDef::Script`): External scripts that own the entire pipeline via stdin/stdout JSON protocol
 - **AdapterRegistry** — Discovers adapters from three sources with precedence: user-installed (`~/.skills/adapters/`) > skill-bundled (`<package>/adapters/`) > built-in (compiled). Built-in adapters (claude-code, codex, pi) are expressed as config-based definitions.
 - **adapter.yaml** — Adapter definition file declaring id, type (config/script), path templates, extra frontmatter fields, optional validate/generate scripts
-- **Resolver** — Selects version + adapter + artifact from local path, cache, or git URL
+- **Resolver** — Selects version + adapter + artifact from local path, cache, or git URL. Supports both v0.1.0 and v0.2.0 manifests.
 - **Activation** — Binding an installed skill to a specific runtime by generating adapter files
+- **Inference** (`aule-infer`) — Two-stage pipeline to generate `skill.yaml` from repos that don't have one:
+  - **Stage 1 (Discovery)**: Deterministic scanners check known locations (`.claude/skills/`, `.codex/skills/`, `.claude/commands/`, `plugin.json`, `SKILL.md`)
+  - **Stage 2 (LLM Suggest)**: If no skills found, gathers repo signals (README, package metadata, file tree) and asks the Claude API for suggestions
+  - Output is always a valid v0.2.0 `ManifestV2`
+  - CLI: `skill infer <source>` and `skill install <source> --infer`

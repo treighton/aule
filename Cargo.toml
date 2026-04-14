@@ -5,6 +5,7 @@ members = [
     "crates/aule-resolver",
     "crates/aule-adapter",
     "crates/aule-cache",
+    "crates/aule-infer",
     "crates/aule-cli",
 ]
 

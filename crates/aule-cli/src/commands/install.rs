@@ -14,14 +14,16 @@ pub fn run(
     version: Option<String>,
     target: Option<String>,
     json: bool,
+    infer: bool,
 ) -> Result<(), CliError> {
     if source.starts_with('@') {
+        // --infer is silently ignored for registry sources
         run_registry(&source, version, target, json)
     } else if is_git_url(&source) {
-        run_git(&source, git_ref.as_deref(), json)
+        run_git(&source, git_ref.as_deref(), json, infer)
     } else {
         let path = PathBuf::from(&source);
-        run_local(path, json)
+        run_local(path, json, infer)
     }
 }
 
@@ -139,9 +141,15 @@ fn run_registry(
     result
 }
 
-fn run_local(path: PathBuf, json: bool) -> Result<(), CliError> {
+fn run_local(path: PathBuf, json: bool, infer: bool) -> Result<(), CliError> {
     let path = std::fs::canonicalize(&path)
         .map_err(|e| CliError::User(format!("invalid path: {}", e)))?;
+
+    // Check for skill.yaml; if missing and --infer, run inference
+    let manifest_path = path.join("skill.yaml");
+    if !manifest_path.exists() && infer {
+        run_infer_fallback(&path, json)?;
+    }
 
     let request = ResolveRequest {
         skill_name: path
@@ -159,9 +167,61 @@ fn run_local(path: PathBuf, json: bool) -> Result<(), CliError> {
     install_plan(&plan, &path, "local", json)
 }
 
-fn run_git(url: &str, git_ref: Option<&str>, json: bool) -> Result<(), CliError> {
+fn run_git(url: &str, git_ref: Option<&str>, json: bool, infer: bool) -> Result<(), CliError> {
     if !json {
         println!("Cloning from {}...", url);
+    }
+
+    // If --infer, clone manually so we can inject skill.yaml before resolving
+    if infer {
+        let temp_dir = std::env::temp_dir().join(format!("skill-install-infer-{}", std::process::id()));
+        if temp_dir.exists() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }
+
+        let mut args = vec!["clone", "--depth", "1"];
+        if let Some(r) = git_ref {
+            args.push("--branch");
+            args.push(r);
+        }
+        let url_str = url.to_string();
+        args.push(&url_str);
+        let temp_str = temp_dir.to_string_lossy().to_string();
+        args.push(&temp_str);
+
+        let status = std::process::Command::new("git")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+            .map_err(|e| CliError::Internal(format!("failed to run git clone: {}", e)))?;
+
+        if !status.success() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(CliError::User(format!("failed to clone {}", url)));
+        }
+
+        // If no skill.yaml, run inference
+        if !temp_dir.join("skill.yaml").exists() {
+            run_infer_fallback(&temp_dir, json)?;
+        }
+
+        let request = ResolveRequest {
+            skill_name: skill_name_from_url(url),
+            version_constraint: None,
+            runtime_target: None,
+            local_path: Some(temp_dir.clone()),
+        };
+
+        let plan = resolve_from_path(&temp_dir, &request)
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                CliError::User(e.to_string())
+            })?;
+
+        let result = install_plan(&plan, &temp_dir, "git", json);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return result;
     }
 
     let request = ResolveRequest {
@@ -283,6 +343,86 @@ fn install_plan(
             "Installed {} v{} (hash: {})",
             plan.skill_name, plan.resolved_version, &identity_hash[..12]
         );
+    }
+
+    Ok(())
+}
+
+/// Run the inference pipeline and write a skill.yaml into the source directory.
+/// Used by `skill install --infer` when no manifest is found.
+fn run_infer_fallback(repo_path: &std::path::Path, json: bool) -> Result<(), CliError> {
+    if !json {
+        println!("No skill.yaml found. Running inference...");
+    }
+
+    // Stage 1: Discovery
+    let scan_result = aule_infer::scanner::scan_all(repo_path)
+        .map_err(|e| CliError::User(e.to_string()))?;
+
+    let yaml = if !scan_result.skills.is_empty() {
+        if !json {
+            println!("  Found {} skill(s) via discovery", scan_result.skills.len());
+        }
+        let manifest = aule_infer::builder::build_from_discovered(&scan_result.skills, repo_path)
+            .map_err(|e| CliError::User(e.to_string()))?;
+        aule_infer::builder::serialize_manifest(&manifest)
+            .map_err(|e| CliError::Internal(e.to_string()))?
+    } else {
+        // Stage 2: LLM Suggest
+        if !json {
+            println!("  No skills in known locations. Analyzing repository...");
+        }
+
+        let signals = aule_infer::gatherer::gather_signals(repo_path)
+            .map_err(|e| CliError::User(e.to_string()))?;
+
+        let assessment = aule_infer::assessor::assess(&signals).map_err(|e| {
+            CliError::User(format!(
+                "{}\nSet ANTHROPIC_API_KEY to enable LLM inference, or add skill artifacts to the repo manually.",
+                e
+            ))
+        })?;
+
+        if !assessment.can_infer {
+            return Err(CliError::User(format!(
+                "LLM could not infer skills: {}",
+                assessment.reasoning
+            )));
+        }
+
+        if !json {
+            println!(
+                "  LLM suggests {} skill(s) (confidence: {:.2})",
+                assessment.suggested_skills.len(),
+                assessment.confidence
+            );
+            for s in &assessment.suggested_skills {
+                println!("    {} — \"{}\"", s.name, s.description);
+            }
+
+            // Interactive confirmation
+            print!("\n? Install with inferred manifest? [Y/n] ");
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let input = input.trim().to_lowercase();
+            if !input.is_empty() && input != "y" && input != "yes" {
+                return Err(CliError::User("cancelled by user".to_string()));
+            }
+        }
+
+        let manifest =
+            aule_infer::builder::build_from_assessment(&assessment, &signals, repo_path)
+                .map_err(|e| CliError::User(e.to_string()))?;
+        aule_infer::builder::serialize_manifest(&manifest)
+            .map_err(|e| CliError::Internal(e.to_string()))?
+    };
+
+    // Write skill.yaml into the source directory
+    std::fs::write(repo_path.join("skill.yaml"), &yaml)?;
+
+    if !json {
+        println!("  skill.yaml generated via inference");
     }
 
     Ok(())

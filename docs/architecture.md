@@ -4,14 +4,15 @@ This document describes Aulë's internal architecture for contributors and anyon
 
 ## Overview
 
-Aulë is a Cargo workspace with five crates organized as a library-first design. The CLI binary (`skill`) is a thin wrapper — all logic lives in the library crates.
+Aulë is a Cargo workspace with six crates organized as a library-first design. The CLI binary (`skill`) is a thin wrapper — all logic lives in the library crates.
 
 ```
 aule-cli (binary)
   ├── aule-schema      Protocol types, parsing, validation
   ├── aule-adapter     Runtime adapter generation
   ├── aule-resolver    Multi-source version resolution
-  └── aule-cache       Local artifact storage and activation
+  ├── aule-cache       Local artifact storage and activation
+  └── aule-infer       Skill inference (discovery + LLM suggestion)
 ```
 
 ## Crate Details
@@ -218,6 +219,56 @@ Each installed artifact stores a `.integrity` file containing the SHA-256 hash o
 - Orphaned artifacts (in filesystem but missing from index)
 - Missing artifacts (in index but missing from filesystem)
 
+### aule-infer
+
+Skill inference engine — generates `skill.yaml` for repos that don't have one. Uses a two-stage pipeline.
+
+**Stage 1 (Discovery)** — deterministic, no API key required:
+
+```
+scan_all(repo_root)
+  ├── ClaudeSkillScanner    .claude/skills/**/*.md   → parse frontmatter
+  ├── CodexSkillScanner     .codex/skills/**/*.md    → parse frontmatter
+  ├── ClaudeCommandScanner  .claude/commands/**/*.md → extract commands
+  ├── PluginScanner         plugin.json              → parse skills/commands
+  └── SkillMdScanner        SKILL.md                 → standalone skill files
+  → ScanResult { skills, warnings }                  → deduplicate by priority
+```
+
+If Stage 1 finds skills, the manifest builder produces a `ManifestV2` mechanically — no LLM call needed.
+
+**Stage 2 (LLM Suggest)** — only runs if Stage 1 finds nothing:
+
+```
+gather_signals(repo_root)
+  ├── GenericGatherer       README, file tree, license, executables
+  ├── NpmGatherer           package.json → name, version, bin entries
+  ├── PythonGatherer        pyproject.toml → name, console_scripts
+  ├── RustGatherer          Cargo.toml → name, binary targets
+  └── GoGatherer            go.mod → module name, cmd/ directory
+  → InferredSignals
+
+assess(signals)                           → Claude API call
+  → LlmAssessment { can_infer, confidence, suggested_skills, suggested_tools }
+
+build_from_assessment(assessment, signals)
+  → ManifestV2                            → validated through aule-schema
+```
+
+**Key types:**
+
+- `DiscoveredSkill` — a skill found by a scanner (name, description, entrypoint, commands, source format)
+- `InferredSignals` — repo metadata for LLM context (readme, package info, file tree, executables)
+- `LlmAssessment` — LLM response with skill/tool suggestions and confidence score
+- `InferError` — comprehensive error enum (NoApiKey, LlmUnavailable, LlmRateLimit, LlmResponseParse)
+
+**Design decisions:**
+
+- Stage 1 is always free and fast — no API key, no network calls. This means repos with existing skill artifacts (`.claude/skills/`, `plugin.json`) can be installed instantly.
+- The LLM assessor uses Claude Sonnet for cost/speed balance. The system prompt emphasizes that `can_infer: false` is a valid answer — the LLM shouldn't force bad output.
+- All output is v0.2.0 `ManifestV2` for consistency, even single-skill results.
+- The builder validates output by round-tripping through `aule-schema`'s parser.
+
 ### aule-cli
 
 The user-facing binary. Maps subcommands to library calls.
@@ -232,7 +283,8 @@ src/
 │   ├── validate.rs  Validate manifest and contract (v0.1.0 + v0.2.0)
 │   ├── build.rs     Generate adapter output (v0.1.0 + v0.2.0)
 │   ├── migrate.rs   Convert v0.1.0 manifest to v0.2.0
-│   ├── install.rs   Install from any source (runs onInstall hook)
+│   ├── infer.rs     Infer skill.yaml from repo content
+│   ├── install.rs   Install from any source (runs onInstall hook, supports --infer)
 │   ├── activate.rs  Bind skill to runtime (runs onActivate hook)
 │   ├── list.rs      List installed/active skills
 │   ├── login.rs     GitHub OAuth flow
@@ -349,11 +401,12 @@ skill adapters test <id>         # Test adapter correctness
 aule-schema     48 tests   Unit: parsing (v0.1.0 + v0.2.0), validation, edge cases
 aule-adapter    55 tests   Unit + integration: adapter definitions, registry, script protocol,
                             v0.1.0/v0.2.0 generation, wrapper scripts, tool docs, real skill validation
-aule-resolver   18 tests   Unit: resolution from each source, policy enforcement
+aule-resolver   18 tests   Unit: resolution from each source, policy enforcement, v0.2.0 manifests
 aule-cache      20 tests   Unit: install, activate, integrity, hooks, index operations
-aule-cli        14 tests   Integration: end-to-end CLI tests with temp directories
+aule-infer      38 tests   Unit: scanners, gatherers, assessor, builder, round-trip validation
+aule-cli        23 tests   Integration: end-to-end CLI tests including infer and install --infer
                 ──────
-                ~154 total
+                ~204 total
 ```
 
 The critical test is `real_skills_test.rs` in `aule-adapter`. It generates adapter output for all example skills (six v0.1.0, one v0.2.0) and asserts byte-for-byte equality with the committed output in `.claude/` and `.codex/`. The v0.2.0 test also verifies wrapper scripts, `## Tools` sections, and included file copying.

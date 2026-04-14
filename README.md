@@ -72,6 +72,22 @@ skill install https://github.com/user/skill-repo --ref main
 
 # From the registry
 skill install @author/skill-name --version "^1.0"
+
+# Install a repo that doesn't have a skill.yaml (auto-infer)
+skill install ./path/to/repo --infer
+```
+
+### Infer a skill from an existing repo
+
+```bash
+# Scan known locations (.claude/skills/, plugin.json, etc.)
+skill infer ./path/to/repo
+
+# If no skills found, uses LLM to suggest (requires ANTHROPIC_API_KEY)
+skill infer https://github.com/user/repo --yes
+
+# Infer and install in one shot
+skill infer ./path/to/repo --install
 ```
 
 ### Activate for a runtime
@@ -220,14 +236,15 @@ Skills must declare the capabilities they need. Users can enforce policies that 
 
 ## Architecture
 
-Aulë is a Cargo workspace with five crates. Library crates do the work; the CLI is a thin wrapper.
+Aulë is a Cargo workspace with six crates. Library crates do the work; the CLI is a thin wrapper.
 
 ```
 aule-cli (binary: `skill`)
   ├── aule-schema      Manifest parsing, contract validation, permissions
   ├── aule-adapter     Generates runtime-specific SKILL.md files
   ├── aule-resolver    Version resolution, policy checks, git clone
-  └── aule-cache       Artifact storage (~/.skills/), activation state
+  ├── aule-cache       Artifact storage (~/.skills/), activation state
+  └── aule-infer       Skill inference from repos without skill.yaml
 ```
 
 ### Crates
@@ -238,6 +255,7 @@ aule-cli (binary: `skill`)
 | **aule-adapter** | Pluggable adapter system | `AdapterDef`, `AdapterRegistry`, `GeneratedFile`, `generate()`, `generate_v2()`, `generate_any()` |
 | **aule-resolver** | Skill resolution from multiple sources | `ResolveRequest`, `ResolvePlan`, `resolve()` |
 | **aule-cache** | Local cache, activation, hook execution | `CacheManager`, `ActivationState`, `execute_hook()` |
+| **aule-infer** | Skill inference (discovery + LLM) | `DiscoveredSkill`, `InferredSignals`, `LlmAssessment`, `scan_all()`, `gather_signals()`, `assess()` |
 | **aule-cli** | CLI binary wrapping all crates | `Commands` enum, subcommand handlers |
 
 ### Local Cache
@@ -270,7 +288,9 @@ skill validate [--path <PATH>]            Validate manifest and contract
 skill build [--path <PATH>] [--target <RUNTIME>] [--output <DIR>]
                                           Generate adapter output
 skill migrate [--path <PATH>]             Migrate a v0.1.0 manifest to v0.2.0
-skill install <SOURCE> [--ref <GIT_REF>] [--version <CONSTRAINT>] [--target <RUNTIME>]
+skill infer <SOURCE> [--install] [--output <PATH>] [--yes] [--force]
+                                          Infer skill.yaml from a repo's content
+skill install <SOURCE> [--ref <GIT_REF>] [--version <CONSTRAINT>] [--target <RUNTIME>] [--infer]
                                           Install from path, git, or registry
 skill activate <NAME> [--target <RUNTIME>]
                                           Bind an installed skill to a runtime
@@ -317,7 +337,7 @@ User configuration lives in `~/.skills/config.json`:
 
 ```bash
 cargo build                # Build all crates
-cargo test                 # Run all tests (~122 tests)
+cargo test                 # Run all tests (~204 tests)
 cargo test -p aule-schema  # Test a single crate
 ```
 
@@ -349,6 +369,7 @@ aule/
 │   ├── aule-adapter/      # Runtime adapter generation
 │   ├── aule-resolver/     # Version resolution (local, git, registry)
 │   ├── aule-cache/        # Local cache and activation
+│   ├── aule-infer/        # Skill inference (discovery + LLM suggestion)
 │   └── aule-cli/          # CLI binary
 ├── examples/              # Example skill packages
 │   ├── skill-init/              # v0.1.0 examples
@@ -378,6 +399,9 @@ aule/
 - [x] CLI with full lifecycle: `init`, `validate`, `build`, `install`, `activate`, `list`, `migrate`
 - [x] Registry commands: `login`, `logout`, `publish`, `search`
 - [x] Seven example skills (six v0.1.0, one v0.2.0 with tools and hooks)
+- [x] Skill inference (`skill infer`) — two-stage pipeline (discovery + LLM suggestion) to generate `skill.yaml` from repos without one
+- [x] `skill install --infer` — install repos that don't have a `skill.yaml` by inferring one first
+- [x] Resolver v0.2.0 support — `resolve_from_path` now handles both manifest versions
 
 ### In Progress
 
@@ -392,7 +416,7 @@ Contributions are welcome. Here's how to get started:
 
 1. **Fork and clone** the repository
 2. **Create a branch** for your change
-3. **Write tests** — the project has ~122 tests and additions should maintain coverage
+3. **Write tests** — the project has ~204 tests and additions should maintain coverage
 4. **Run `cargo test`** to verify everything passes
 5. **Submit a pull request** with a clear description of what and why
 

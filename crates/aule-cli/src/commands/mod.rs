@@ -1,6 +1,7 @@
 pub mod activate;
 pub mod adapters;
 pub mod build;
+pub mod infer;
 pub mod init;
 pub mod install;
 pub mod list;

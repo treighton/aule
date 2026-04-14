@@ -4,13 +4,14 @@ use semver::{Version, VersionReq};
 use tempfile::TempDir;
 
 use aule_schema::contract::Contract;
-use aule_schema::manifest::{ContractRef, Manifest};
+use aule_schema::manifest::{parse_manifest_any, ContractRef, Manifest, ManifestAny};
 use aule_schema::permissions::{max_risk_tier, RiskTier};
 
 use crate::error::ResolveError;
 use crate::types::{ArtifactSource, CacheIndexEntry, InstallPlan, ResolveRequest, ResolvedAdapter};
 
 /// Build an install plan from a local skill directory.
+/// Supports both v0.1.0 and v0.2.0 manifests.
 pub fn resolve_from_path(
     path: &Path,
     request: &ResolveRequest,
@@ -23,37 +24,61 @@ pub fn resolve_from_path(
         ))
     })?;
 
-    let manifest: Manifest = serde_yaml::from_str(&content)
-        .map_err(|e| ResolveError::ManifestError(format!("YAML parse error: {e}")))?;
+    let manifest_any = parse_manifest_any(&content)
+        .map_err(|e| ResolveError::ManifestError(format!("manifest error: {e}")))?;
+
+    let name = manifest_any.name().to_string();
+    let version = manifest_any.version().to_string();
 
     // Check version constraint if provided
     if let Some(ref constraint_str) = request.version_constraint {
         let req = VersionReq::parse(constraint_str).map_err(|e| {
             ResolveError::ManifestError(format!("invalid version constraint \"{constraint_str}\": {e}"))
         })?;
-        let ver = Version::parse(&manifest.version).map_err(|e| {
+        let ver = Version::parse(&version).map_err(|e| {
             ResolveError::ManifestError(format!(
-                "invalid manifest version \"{}\": {e}",
-                manifest.version
+                "invalid manifest version \"{version}\": {e}",
             ))
         })?;
         if !req.matches(&ver) {
             return Err(ResolveError::NoMatchingVersion {
-                name: manifest.name.clone(),
+                name: name.clone(),
                 constraint: constraint_str.clone(),
             });
         }
     }
 
-    let (contract_version, permissions) = extract_contract_info(&manifest, path)?;
+    let (contract_version, permissions) = match &manifest_any {
+        ManifestAny::V1(m) => extract_contract_info(m, path)?,
+        ManifestAny::V2(m) => {
+            // For v0.2.0, aggregate permissions from all skills
+            let mut all_perms: Vec<String> = Vec::new();
+            for skill in m.skills.values() {
+                for perm in &skill.permissions {
+                    if !all_perms.contains(perm) {
+                        all_perms.push(perm.clone());
+                    }
+                }
+            }
+            // Use first skill's version as contract version
+            let cv = m
+                .skills
+                .values()
+                .next()
+                .map(|s| s.version.clone())
+                .unwrap_or_else(|| "1.0.0".to_string());
+            (cv, all_perms)
+        }
+    };
+
     let risk_tier = if permissions.is_empty() {
         RiskTier::None
     } else {
         max_risk_tier(&permissions)
     };
 
-    let adapters: Vec<ResolvedAdapter> = manifest
-        .adapters
+    let adapters: Vec<ResolvedAdapter> = manifest_any
+        .adapters()
         .iter()
         .map(|(id, cfg)| ResolvedAdapter {
             runtime_id: id.clone(),
@@ -62,8 +87,8 @@ pub fn resolve_from_path(
         .collect();
 
     Ok(InstallPlan {
-        skill_name: manifest.name,
-        resolved_version: manifest.version,
+        skill_name: name,
+        resolved_version: version,
         contract_version,
         adapters,
         artifact_source: ArtifactSource::LocalPath(path.to_path_buf()),

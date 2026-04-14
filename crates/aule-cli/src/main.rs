@@ -44,6 +44,26 @@ enum Commands {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Infer a skill.yaml from a repository's content
+    Infer {
+        /// Local path or git URL to analyze
+        source: String,
+        /// Install the skill after inference
+        #[arg(long)]
+        install: bool,
+        /// Write skill.yaml to a specific path (default: stdout)
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Auto-accept LLM suggestions without confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Re-infer even if skill.yaml already exists
+        #[arg(long)]
+        force: bool,
+        /// Git branch/tag/commit to use (for git URL sources)
+        #[arg(long = "git-ref")]
+        git_ref: Option<String>,
+    },
     /// Install a skill from a local path, git URL, or registry (@owner/name)
     Install {
         /// Path, git URL, or @owner/name registry identifier
@@ -57,6 +77,9 @@ enum Commands {
         /// Target runtime to activate after install (only used with registry installs)
         #[arg(long)]
         target: Option<String>,
+        /// Infer skill.yaml if not found at the source
+        #[arg(long)]
+        infer: bool,
     },
     /// Activate an installed skill for a runtime target
     Activate {
@@ -128,12 +151,21 @@ fn main() {
             output,
             path,
         } => commands::build::run(target, output, path, json_output),
+        Commands::Infer {
+            source,
+            install,
+            output,
+            yes,
+            force,
+            git_ref,
+        } => commands::infer::run(source, install, output, json_output, yes, force, git_ref),
         Commands::Install {
             source,
             git_ref,
             version,
             target,
-        } => commands::install::run(source, git_ref, version, target, json_output),
+            infer,
+        } => commands::install::run(source, git_ref, version, target, json_output, infer),
         Commands::Activate { name, target } => commands::activate::run(name, target, json_output),
         Commands::List { installed, active } => {
             commands::list::run(installed, active, json_output)

@@ -13,6 +13,7 @@ aule-schema = { path = "../aule-schema" }
 aule-resolver = { path = "../aule-resolver" }
 aule-adapter = { path = "../aule-adapter" }
 aule-cache = { path = "../aule-cache" }
+aule-infer = { path = "../aule-infer" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
