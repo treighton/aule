@@ -3,7 +3,13 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use aule_schema::manifest::{Manifest, ManifestAny, ManifestV2, SkillDefinition, Tool};
-use crate::target::RuntimeTarget;
+use crate::adapter_def::{AdapterDef, ConfigAdapter, ScriptAdapter};
+use crate::registry::AdapterRegistry;
+use crate::script::{self, ScriptInput, ScriptContent, ScriptOptions};
+use crate::paths::resolve_output_path;
+
+// RuntimeTarget is kept in target.rs for backward compatibility but
+// no longer used directly in generation. Tests may still reference it.
 
 #[derive(Debug, Clone)]
 pub struct GeneratedFile {
@@ -17,6 +23,8 @@ pub struct GenerateOptions {
     pub targets: Vec<String>,
     /// Output root directory. If None, uses the base_path.
     pub output_dir: Option<PathBuf>,
+    /// Adapter registry to use. If None, uses built-in adapters only.
+    pub registry: Option<AdapterRegistry>,
 }
 
 #[derive(Debug, Error)]
@@ -29,10 +37,18 @@ pub enum GenerateError {
     Io(#[from] std::io::Error),
     #[error("no enabled adapter targets found")]
     NoTargets,
+    #[error("script adapter error: {0}")]
+    ScriptError(String),
 }
 
+// PI_EXTRA_FIELDS has been replaced by per-adapter extra_fields in AdapterDef.
+
 /// Build YAML frontmatter string from manifest fields for a skill file.
-fn build_skill_frontmatter(manifest: &Manifest) -> String {
+fn build_skill_frontmatter(
+    manifest: &Manifest,
+    adapter_extra: &HashMap<String, serde_json::Value>,
+    allowed_extra_fields: &[String],
+) -> String {
     let mut lines = vec!["---".to_string()];
 
     lines.push(format!("name: {}", manifest.name));
@@ -53,6 +69,9 @@ fn build_skill_frontmatter(manifest: &Manifest) -> String {
             lines.push(format!("compatibility: Requires {}.", tools.join(", ")));
         }
     }
+
+    // Adapter-specific extra fields from adapter config
+    append_adapter_extras(&mut lines, adapter_extra, allowed_extra_fields);
 
     // metadata block
     if let Some(ref meta) = manifest.metadata {
@@ -82,20 +101,56 @@ fn build_skill_frontmatter(manifest: &Manifest) -> String {
     lines.join("\n")
 }
 
-/// Build YAML frontmatter for a Claude Code command file.
-fn build_claude_command_frontmatter(manifest: &Manifest, command_name: &str) -> String {
-    let display_name = format!("OPSX: {}", titlecase(command_name));
+/// Append adapter extra fields to frontmatter lines.
+///
+/// Only includes fields listed in `allowed_fields` (from the adapter definition).
+fn append_adapter_extras(
+    lines: &mut Vec<String>,
+    extras: &HashMap<String, serde_json::Value>,
+    allowed_fields: &[String],
+) {
+    for key in allowed_fields {
+        if let Some(value) = extras.get(key.as_str()) {
+            match value {
+                serde_json::Value::String(s) => {
+                    lines.push(format!("{}: {}", key, s));
+                }
+                serde_json::Value::Bool(b) => {
+                    lines.push(format!("{}: {}", key, b));
+                }
+                other => {
+                    lines.push(format!("{}: {}", key, other));
+                }
+            }
+        }
+    }
+}
+
+/// Build YAML frontmatter for a command file (v0.1.0).
+///
+/// Uses the adapter's CommandConfig for display name, category, and tags.
+fn build_command_frontmatter(
+    manifest: &Manifest,
+    command_name: &str,
+    adapter: &ConfigAdapter,
+) -> String {
+    let cmd_config = adapter.paths.commands.as_ref().expect("command config required");
+    let display_name = cmd_config.display_name
+        .replace("{command}", &titlecase(command_name))
+        .replace("{skill}", &manifest.name);
     let mut lines = vec!["---".to_string()];
     lines.push(format!("name: \"{}\"", display_name));
     lines.push(format!(
         "description: \"{}\"",
         manifest.description
     ));
-    lines.push("category: Workflow".to_string());
-    lines.push(format!(
-        "tags: [workflow, {}, experimental]",
-        command_name
-    ));
+    lines.push(format!("category: {}", cmd_config.category));
+    // Build tags, resolving placeholders
+    let tags: Vec<String> = cmd_config.tags.iter().map(|t| {
+        t.replace("{command}", command_name)
+            .replace("{skill}", &manifest.name)
+    }).collect();
+    lines.push(format!("tags: [{}]", tags.join(", ")));
     lines.push("---".to_string());
     lines.join("\n")
 }
@@ -108,38 +163,44 @@ fn titlecase(s: &str) -> String {
     }
 }
 
-/// Generate the SKILL.md file for a given target.
+/// Generate the SKILL.md file for a given config-based adapter.
 pub fn generate_skill_file(
     manifest: &Manifest,
-    target: &RuntimeTarget,
+    adapter: &AdapterDef,
     content: &str,
+    adapter_extra: &HashMap<String, serde_json::Value>,
 ) -> GeneratedFile {
-    let frontmatter = build_skill_frontmatter(manifest);
+    let frontmatter = build_skill_frontmatter(manifest, adapter_extra, adapter.extra_fields());
     let full_content = format!("{}\n\n{}", frontmatter, content);
 
     GeneratedFile {
-        relative_path: target.skill_path(&manifest.name),
+        relative_path: adapter.skill_path(&manifest.name),
         content: full_content,
     }
 }
 
-/// Generate command files for a target (if supported).
+/// Generate command files for a config-based adapter (if supported).
 pub fn generate_command_files(
     manifest: &Manifest,
-    target: &RuntimeTarget,
+    adapter: &AdapterDef,
     commands: &HashMap<String, String>,
 ) -> Vec<GeneratedFile> {
-    if !target.supports_commands {
+    if !adapter.supports_commands() {
         return Vec::new();
     }
+
+    let config_adapter = match adapter {
+        AdapterDef::Config(c) => c,
+        AdapterDef::Script(_) => return Vec::new(),
+    };
 
     let namespace = derive_namespace(&manifest.name);
 
     commands
         .iter()
         .filter_map(|(name, body)| {
-            let path = target.command_path(&namespace, name)?;
-            let frontmatter = build_claude_command_frontmatter(manifest, name);
+            let path = adapter.command_path(&namespace, name)?;
+            let frontmatter = build_command_frontmatter(manifest, name, config_adapter);
             let full_content = format!("{}\n\n{}", frontmatter, body);
             Some(GeneratedFile {
                 relative_path: path,
@@ -208,19 +269,29 @@ pub fn generate(
         }
     }
 
-    // Determine which targets to generate for
-    let targets = resolve_targets(manifest, options)?;
-    if targets.is_empty() {
+    // Determine which adapters to generate for
+    let registry = options.registry.as_ref()
+        .map(|r| std::borrow::Cow::Borrowed(r))
+        .unwrap_or_else(|| std::borrow::Cow::Owned(AdapterRegistry::built_in_only()));
+    let adapters = resolve_adapters(manifest.adapters.iter(), options, &registry)?;
+    if adapters.is_empty() {
         return Err(GenerateError::NoTargets);
     }
 
+    let explicit_output = options.output_dir.is_some();
     let output_root = options.output_dir.as_deref().unwrap_or(base_path);
     let mut generated = Vec::new();
 
-    for target in &targets {
+    for adapter in &adapters {
+        // Look up adapter extra config for this adapter
+        let empty_extra = HashMap::new();
+        let adapter_extra = manifest.adapters.get(adapter.id())
+            .map(|c| &c.extra)
+            .unwrap_or(&empty_extra);
+
         // Generate skill file
-        let skill_file = generate_skill_file(manifest, target, &skill_content);
-        let skill_out = output_root.join(&skill_file.relative_path);
+        let skill_file = generate_skill_file(manifest, adapter, &skill_content, adapter_extra);
+        let skill_out = resolve_output_path(output_root, &skill_file.relative_path, explicit_output);
         if let Some(parent) = skill_out.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -233,9 +304,9 @@ pub fn generate(
         }
 
         // Generate command files
-        let cmd_files = generate_command_files(manifest, target, &command_contents);
+        let cmd_files = generate_command_files(manifest, adapter, &command_contents);
         for cmd_file in cmd_files {
-            let cmd_out = output_root.join(&cmd_file.relative_path);
+            let cmd_out = resolve_output_path(output_root, &cmd_file.relative_path, explicit_output);
             if let Some(parent) = cmd_out.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -254,6 +325,8 @@ fn build_skill_frontmatter_v2(
     manifest: &ManifestV2,
     skill_name: &str,
     skill_def: &SkillDefinition,
+    adapter_extra: &HashMap<String, serde_json::Value>,
+    allowed_extra_fields: &[String],
 ) -> String {
     let mut lines = vec!["---".to_string()];
 
@@ -277,6 +350,9 @@ fn build_skill_frontmatter_v2(
             lines.push(format!("compatibility: Requires {}.", tools.join(", ")));
         }
     }
+
+    // Adapter-specific extra fields from adapter config
+    append_adapter_extras(&mut lines, adapter_extra, allowed_extra_fields);
 
     // metadata block
     if let Some(ref meta) = manifest.metadata {
@@ -454,11 +530,15 @@ pub fn generate_v2(
     base_path: &Path,
     options: &GenerateOptions,
 ) -> Result<Vec<GeneratedFile>, GenerateError> {
-    let targets = resolve_targets_v2(manifest, options)?;
-    if targets.is_empty() {
+    let registry = options.registry.as_ref()
+        .map(|r| std::borrow::Cow::Borrowed(r))
+        .unwrap_or_else(|| std::borrow::Cow::Owned(AdapterRegistry::built_in_only()));
+    let adapters = resolve_adapters(manifest.adapters.iter(), options, &registry)?;
+    if adapters.is_empty() {
         return Err(GenerateError::NoTargets);
     }
 
+    let explicit_output = options.output_dir.is_some();
     let output_root = options.output_dir.as_deref().unwrap_or(base_path);
     let mut generated = Vec::new();
 
@@ -469,7 +549,35 @@ pub fn generate_v2(
     let mut skill_names: Vec<&String> = manifest.skills.keys().collect();
     skill_names.sort();
 
-    for target in &targets {
+    for adapter in &adapters {
+        // Look up adapter extra config for this adapter
+        let empty_extra = HashMap::new();
+        let adapter_extra = manifest.adapters.get(adapter.id())
+            .map(|c| &c.extra)
+            .unwrap_or(&empty_extra);
+
+        // For script-based adapters, delegate entirely to the script
+        if let AdapterDef::Script(script_adapter) = adapter {
+            let script_files = generate_v2_via_script(
+                manifest, base_path, script_adapter, adapter_extra,
+                &included_files, &skill_names, options,
+            )?;
+            for file in script_files {
+                let file_out = resolve_output_path(output_root, &file.relative_path, explicit_output);
+                if let Some(parent) = file_out.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&file_out, &file.content)?;
+                generated.push(file);
+            }
+            continue;
+        }
+
+        let config_adapter = match adapter {
+            AdapterDef::Config(c) => c,
+            AdapterDef::Script(_) => unreachable!(),
+        };
+
         for skill_name in &skill_names {
             let skill_def = &manifest.skills[*skill_name];
 
@@ -483,7 +591,9 @@ pub fn generate_v2(
             let skill_content = std::fs::read_to_string(&content_path)?;
 
             // Build frontmatter + body
-            let frontmatter = build_skill_frontmatter_v2(manifest, skill_name, skill_def);
+            let frontmatter = build_skill_frontmatter_v2(
+                manifest, skill_name, skill_def, adapter_extra, adapter.extra_fields(),
+            );
             let mut full_content = format!("{}\n\n{}", frontmatter, skill_content);
 
             // Append tools documentation section
@@ -494,11 +604,11 @@ pub fn generate_v2(
             }
 
             let skill_file = GeneratedFile {
-                relative_path: target.skill_path(skill_name),
+                relative_path: adapter.skill_path(skill_name),
                 content: full_content,
             };
 
-            let skill_out = output_root.join(&skill_file.relative_path);
+            let skill_out = resolve_output_path(output_root, &skill_file.relative_path, explicit_output);
             if let Some(parent) = skill_out.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -515,7 +625,7 @@ pub fn generate_v2(
             if let Some(ref commands) = skill_def.commands {
                 let namespace = derive_namespace(skill_name);
                 for (cmd_name, cmd_path) in commands {
-                    if !target.supports_commands {
+                    if !adapter.supports_commands() {
                         continue;
                     }
                     let cmd_content_path = base_path.join(cmd_path);
@@ -524,14 +634,14 @@ pub fn generate_v2(
                     }
                     let cmd_body = std::fs::read_to_string(&cmd_content_path)?;
 
-                    if let Some(rel_path) = target.command_path(&namespace, cmd_name) {
+                    if let Some(rel_path) = adapter.command_path(&namespace, cmd_name) {
                         let cmd_frontmatter =
-                            build_claude_command_frontmatter_v2(manifest, skill_name, cmd_name);
+                            build_command_frontmatter_v2(manifest, skill_name, cmd_name, config_adapter);
                         let cmd_file = GeneratedFile {
                             relative_path: rel_path,
                             content: format!("{}\n\n{}", cmd_frontmatter, cmd_body),
                         };
-                        let cmd_out = output_root.join(&cmd_file.relative_path);
+                        let cmd_out = resolve_output_path(output_root, &cmd_file.relative_path, explicit_output);
                         if let Some(parent) = cmd_out.parent() {
                             std::fs::create_dir_all(parent)?;
                         }
@@ -580,7 +690,7 @@ pub fn generate_v2(
                         skill_dir.strip_prefix(output_root).unwrap_or(skill_dir.as_ref()).display(),
                         tool_name
                     );
-                    let wrapper_path = output_root.join(&wrapper_rel);
+                    let wrapper_path = resolve_output_path(output_root, &wrapper_rel, explicit_output);
                     if let Some(parent) = wrapper_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
@@ -606,22 +716,112 @@ pub fn generate_v2(
     Ok(generated)
 }
 
+/// Generate v0.2.0 output via a script adapter.
+fn generate_v2_via_script(
+    manifest: &ManifestV2,
+    base_path: &Path,
+    script_adapter: &ScriptAdapter,
+    adapter_extra: &HashMap<String, serde_json::Value>,
+    included_files: &[String],
+    skill_names: &[&String],
+    options: &GenerateOptions,
+) -> Result<Vec<GeneratedFile>, GenerateError> {
+    // Build content map
+    let mut skills_content = HashMap::new();
+    let mut commands_content: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut files_content = HashMap::new();
+
+    for skill_name in skill_names {
+        let skill_def = &manifest.skills[*skill_name];
+        let content_path = base_path.join(&skill_def.entrypoint);
+        if content_path.exists() {
+            skills_content.insert(
+                skill_name.to_string(),
+                std::fs::read_to_string(&content_path)?,
+            );
+        }
+        if let Some(ref commands) = skill_def.commands {
+            let mut cmds = HashMap::new();
+            for (cmd_name, cmd_path) in commands {
+                let cmd_content_path = base_path.join(cmd_path);
+                if cmd_content_path.exists() {
+                    cmds.insert(cmd_name.clone(), std::fs::read_to_string(&cmd_content_path)?);
+                }
+            }
+            if !cmds.is_empty() {
+                commands_content.insert(skill_name.to_string(), cmds);
+            }
+        }
+    }
+
+    for rel_file in included_files {
+        let src = base_path.join(rel_file);
+        if src.exists() && src.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&src) {
+                files_content.insert(rel_file.clone(), content);
+            }
+        }
+    }
+
+    let manifest_json = serde_json::to_value(manifest)
+        .map_err(|e| GenerateError::ScriptError(format!("failed to serialize manifest: {}", e)))?;
+    let adapter_config_json = serde_json::to_value(adapter_extra)
+        .map_err(|e| GenerateError::ScriptError(format!("failed to serialize adapter config: {}", e)))?;
+
+    let input = ScriptInput {
+        protocol_version: script_adapter.protocol,
+        manifest: manifest_json,
+        content: ScriptContent {
+            skills: skills_content,
+            commands: commands_content,
+            files: files_content,
+        },
+        adapter_config: adapter_config_json,
+        options: ScriptOptions {
+            output_dir: options.output_dir.as_ref().map(|p| p.display().to_string()),
+            base_path: base_path.display().to_string(),
+        },
+    };
+
+    // Run validation if adapter has a validate script
+    if let Some(ref validate_script) = script_adapter.validate {
+        let validation = script::execute_validate_script(script_adapter, validate_script, &input)
+            .map_err(|e| GenerateError::ScriptError(format!("validation failed: {}", e)))?;
+        if !validation.valid {
+            let errors: Vec<String> = validation.errors.iter()
+                .map(|e| e.message.clone())
+                .collect();
+            return Err(GenerateError::ScriptError(
+                format!("validation errors: {}", errors.join(", "))
+            ));
+        }
+    }
+
+    script::execute_generate_script(script_adapter, &input)
+        .map_err(|e| GenerateError::ScriptError(e.to_string()))
+}
+
 /// Build command frontmatter for v0.2.0 (uses skill name for display).
-fn build_claude_command_frontmatter_v2(
+fn build_command_frontmatter_v2(
     manifest: &ManifestV2,
     skill_name: &str,
     command_name: &str,
+    adapter: &ConfigAdapter,
 ) -> String {
-    let display_name = format!("{}: {}", skill_name, titlecase(command_name));
+    let cmd_config = adapter.paths.commands.as_ref().expect("command config required");
+    let display_name = cmd_config.display_name
+        .replace("{command}", &titlecase(command_name))
+        .replace("{skill}", skill_name);
     let skill_def = &manifest.skills[skill_name];
     let mut lines = vec!["---".to_string()];
     lines.push(format!("name: \"{}\"", display_name));
     lines.push(format!("description: \"{}\"", skill_def.description));
-    lines.push("category: Workflow".to_string());
-    lines.push(format!(
-        "tags: [workflow, {}, {}]",
-        skill_name, command_name
-    ));
+    lines.push(format!("category: {}", cmd_config.category));
+    let tags: Vec<String> = cmd_config.tags.iter().map(|t| {
+        t.replace("{command}", command_name)
+            .replace("{skill}", skill_name)
+    }).collect();
+    lines.push(format!("tags: [{}]", tags.join(", ")));
     lines.push("---".to_string());
     lines.join("\n")
 }
@@ -638,44 +838,25 @@ pub fn generate_any(
     }
 }
 
-fn resolve_targets_v2(
-    manifest: &ManifestV2,
+/// Resolve which adapters to generate for.
+///
+/// If `options.targets` is non-empty, use only those explicit targets.
+/// Otherwise, use all enabled adapters from the manifest's `adapters` section.
+fn resolve_adapters<'a>(
+    manifest_adapters: impl Iterator<Item = (&'a String, &'a aule_schema::manifest::AdapterConfig)>,
     options: &GenerateOptions,
-) -> Result<Vec<RuntimeTarget>, GenerateError> {
+    registry: &AdapterRegistry,
+) -> Result<Vec<AdapterDef>, GenerateError> {
     if !options.targets.is_empty() {
         Ok(options
             .targets
             .iter()
-            .filter_map(|id| RuntimeTarget::by_id(id))
+            .filter_map(|id| registry.by_id(id).map(|e| e.def.clone()))
             .collect())
     } else {
-        Ok(manifest
-            .adapters
-            .iter()
+        Ok(manifest_adapters
             .filter(|(_, config)| config.enabled)
-            .filter_map(|(id, _)| RuntimeTarget::by_id(id))
-            .collect())
-    }
-}
-
-fn resolve_targets(
-    manifest: &Manifest,
-    options: &GenerateOptions,
-) -> Result<Vec<RuntimeTarget>, GenerateError> {
-    if !options.targets.is_empty() {
-        // Use explicitly requested targets
-        Ok(options
-            .targets
-            .iter()
-            .filter_map(|id| RuntimeTarget::by_id(id))
-            .collect())
-    } else {
-        // Use all enabled adapters from manifest
-        Ok(manifest
-            .adapters
-            .iter()
-            .filter(|(_, config)| config.enabled)
-            .filter_map(|(id, _)| RuntimeTarget::by_id(id))
+            .filter_map(|(id, _)| registry.by_id(id).map(|e| e.def.clone()))
             .collect())
     }
 }
@@ -724,8 +905,8 @@ dependencies:
     #[test]
     fn generate_claude_code_skill() {
         let manifest = parse_manifest(TEST_MANIFEST).unwrap();
-        let target = RuntimeTarget::claude_code();
-        let file = generate_skill_file(&manifest, &target, TEST_SKILL_BODY);
+        let target = AdapterDef::claude_code();
+        let file = generate_skill_file(&manifest, &target, TEST_SKILL_BODY, &HashMap::new());
 
         assert_eq!(file.relative_path, ".claude/skills/test-skill/SKILL.md");
         assert!(file.content.contains("name: test-skill"));
@@ -738,8 +919,8 @@ dependencies:
     #[test]
     fn generate_codex_skill() {
         let manifest = parse_manifest(TEST_MANIFEST).unwrap();
-        let target = RuntimeTarget::codex();
-        let file = generate_skill_file(&manifest, &target, TEST_SKILL_BODY);
+        let target = AdapterDef::codex();
+        let file = generate_skill_file(&manifest, &target, TEST_SKILL_BODY, &HashMap::new());
 
         assert_eq!(file.relative_path, ".codex/skills/test-skill/SKILL.md");
         assert!(file.content.ends_with(TEST_SKILL_BODY));
@@ -748,7 +929,7 @@ dependencies:
     #[test]
     fn codex_skips_commands() {
         let manifest = parse_manifest(TEST_MANIFEST).unwrap();
-        let target = RuntimeTarget::codex();
+        let target = AdapterDef::codex();
         let commands: HashMap<String, String> =
             HashMap::from([("explore".to_string(), "explore body".to_string())]);
 
@@ -759,7 +940,7 @@ dependencies:
     #[test]
     fn claude_code_generates_commands() {
         let manifest = parse_manifest(TEST_MANIFEST).unwrap();
-        let target = RuntimeTarget::claude_code();
+        let target = AdapterDef::claude_code();
         let commands: HashMap<String, String> =
             HashMap::from([("explore".to_string(), "explore body".to_string())]);
 
@@ -772,9 +953,9 @@ dependencies:
     #[test]
     fn body_passthrough_is_identical() {
         let manifest = parse_manifest(TEST_MANIFEST).unwrap();
-        let target = RuntimeTarget::claude_code();
+        let target = AdapterDef::claude_code();
         let body = "Exact content with special chars: 日本語 & <tags> \"quotes\"";
-        let file = generate_skill_file(&manifest, &target, body);
+        let file = generate_skill_file(&manifest, &target, body, &HashMap::new());
 
         // Body should appear after the frontmatter exactly as provided
         let after_frontmatter = file.content.split("---\n\n").nth(1).unwrap();
@@ -794,6 +975,7 @@ dependencies:
         let options = GenerateOptions {
             targets: vec![],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         let files = generate(&manifest, &src, &options).unwrap();
@@ -822,6 +1004,7 @@ dependencies:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         let _files = generate(&manifest, &src, &options).unwrap();
@@ -937,6 +1120,7 @@ metadata:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         let _files = generate_v2(&manifest, &src, &options).unwrap();
@@ -964,6 +1148,7 @@ metadata:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         generate_v2(&manifest, &src, &options).unwrap();
@@ -1039,6 +1224,7 @@ metadata:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         generate_v2(&manifest, &src, &options).unwrap();
@@ -1063,6 +1249,7 @@ metadata:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         generate_v2(&manifest, &src, &options).unwrap();
@@ -1102,11 +1289,77 @@ adapters:
         let options = GenerateOptions {
             targets: vec!["claude-code".to_string()],
             output_dir: Some(output.clone()),
+            ..Default::default()
         };
 
         generate_v2(&manifest, &src, &options).unwrap();
 
         let skill_md = fs::read_to_string(output.join(".claude/skills/main/SKILL.md")).unwrap();
         assert!(!skill_md.contains("## Tools"), "should not have Tools section");
+    }
+
+    // --- Pi adapter tests ---
+
+    #[test]
+    fn generate_pi_skill() {
+        let manifest = parse_manifest(TEST_MANIFEST).unwrap();
+        let target = AdapterDef::pi();
+        let file = generate_skill_file(&manifest, &target, TEST_SKILL_BODY, &HashMap::new());
+
+        assert_eq!(file.relative_path, "~/.pi/agent/skills/test-skill/SKILL.md");
+        assert!(file.content.contains("name: test-skill"));
+        assert!(file.content.contains("description: A test skill"));
+        assert!(file.content.ends_with(TEST_SKILL_BODY));
+    }
+
+    #[test]
+    fn pi_skips_commands() {
+        let manifest = parse_manifest(TEST_MANIFEST).unwrap();
+        let target = AdapterDef::pi();
+        let commands: HashMap<String, String> =
+            HashMap::from([("explore".to_string(), "explore body".to_string())]);
+
+        let files = generate_command_files(&manifest, &target, &commands);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn pi_frontmatter_with_allowed_tools() {
+        let manifest = parse_manifest(TEST_MANIFEST).unwrap();
+        let target = AdapterDef::pi();
+        let mut extras = HashMap::new();
+        extras.insert(
+            "allowed-tools".to_string(),
+            serde_json::json!(["Read", "Write"]),
+        );
+        let file = generate_skill_file(&manifest, &target, "body", &extras);
+
+        assert!(file.content.contains("allowed-tools: [\"Read\",\"Write\"]"),
+            "should include allowed-tools in frontmatter, got:\n{}", file.content);
+    }
+
+    #[test]
+    fn pi_frontmatter_with_disable_model_invocation() {
+        let manifest = parse_manifest(TEST_MANIFEST).unwrap();
+        let target = AdapterDef::pi();
+        let mut extras = HashMap::new();
+        extras.insert(
+            "disable-model-invocation".to_string(),
+            serde_json::json!(true),
+        );
+        let file = generate_skill_file(&manifest, &target, "body", &extras);
+
+        assert!(file.content.contains("disable-model-invocation: true"),
+            "should include disable-model-invocation, got:\n{}", file.content);
+    }
+
+    #[test]
+    fn pi_frontmatter_no_extras() {
+        let manifest = parse_manifest(TEST_MANIFEST).unwrap();
+        let target = AdapterDef::pi();
+        let file = generate_skill_file(&manifest, &target, "body", &HashMap::new());
+
+        assert!(!file.content.contains("allowed-tools"));
+        assert!(!file.content.contains("disable-model-invocation"));
     }
 }

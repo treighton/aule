@@ -49,6 +49,7 @@ pub fn run(name: String, target: Option<String>, json: bool) -> Result<(), CliEr
         let options = GenerateOptions {
             targets: vec![rt.id.clone()],
             output_dir: None, // generates into current directory
+            ..Default::default()
         };
 
         let generated = generate_any(&manifest_any, base_path, &options)

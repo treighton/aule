@@ -416,7 +416,7 @@ pub fn validate_manifest(manifest: &Manifest, base_path: Option<&Path>) -> Valid
     }
 
     // unknown adapter targets (warning, not error)
-    let known_targets = ["claude-code", "codex"];
+    let known_targets = ["claude-code", "codex", "pi"];
     for target in manifest.adapters.keys() {
         if !known_targets.contains(&target.as_str()) {
             result.add(ValidationMessage {
@@ -637,7 +637,7 @@ pub fn validate_manifest_v2(manifest: &ManifestV2, base_path: Option<&Path>) -> 
     }
 
     // unknown adapter targets (warning, not error)
-    let known_targets = ["claude-code", "codex"];
+    let known_targets = ["claude-code", "codex", "pi"];
     for target in manifest.adapters.keys() {
         if !known_targets.contains(&target.as_str()) {
             result.add(ValidationMessage {

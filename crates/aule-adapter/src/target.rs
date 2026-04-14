@@ -32,16 +32,26 @@ impl RuntimeTarget {
         }
     }
 
+    pub fn pi() -> Self {
+        Self {
+            id: "pi".to_string(),
+            skill_path_template: "~/.pi/agent/skills/{name}/SKILL.md".to_string(),
+            command_path_template: None,
+            supports_commands: false,
+        }
+    }
+
     pub fn by_id(id: &str) -> Option<Self> {
         match id {
             "claude-code" => Some(Self::claude_code()),
             "codex" => Some(Self::codex()),
+            "pi" => Some(Self::pi()),
             _ => None,
         }
     }
 
     pub fn all_known() -> Vec<Self> {
-        vec![Self::claude_code(), Self::codex()]
+        vec![Self::claude_code(), Self::codex(), Self::pi()]
     }
 
     pub fn skill_path(&self, name: &str) -> String {

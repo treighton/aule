@@ -109,6 +109,11 @@ enum Commands {
         #[arg(long)]
         limit: Option<u32>,
     },
+    /// Manage adapter definitions
+    Adapters {
+        #[command(subcommand)]
+        command: commands::adapters::AdaptersCommands,
+    },
 }
 
 fn main() {
@@ -144,6 +149,7 @@ fn main() {
             runtime,
             limit,
         } => commands::search::run(query, runtime, limit, json_output),
+        Commands::Adapters { command } => commands::adapters::run(command, json_output),
     };
 
     match result {

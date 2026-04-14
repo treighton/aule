@@ -148,6 +148,8 @@ adapters:
     enabled: true
   codex:
     enabled: true
+  pi:
+    enabled: true
 
 metadata:
   author: "aule"

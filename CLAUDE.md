@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                     # Build all crates
-cargo test                      # Run all ~122 tests
+cargo test                      # Run all ~154 tests
 cargo test -p aule-schema       # Test one crate
 cargo test -p aule-adapter --test real_skills_test  # Run real skill validation
 cargo run -p aule-cli -- --help # Run the CLI
@@ -23,10 +23,10 @@ The binary is named `skill` (defined in `aule-cli/Cargo.toml`).
 ```
 crates/
   aule-schema/     — Protocol types: manifest (v0.1.0 + v0.2.0), contract, permissions, envelope, metadata
-  aule-adapter/    — Adapter generator: manifest → SKILL.md + wrapper scripts + tool docs + file bundling
+  aule-adapter/    — Pluggable adapter system: manifest → SKILL.md via config-based or script-based adapters
   aule-resolver/   — Skill resolution: local path, cache, git URL, semver constraints
   aule-cache/      — Local ~/.skills/ cache: artifacts, metadata index, activation state, hook execution
-  aule-cli/        — `skill` binary: init, validate, build, migrate, install, activate, list
+  aule-cli/        — `skill` binary: init, validate, build, migrate, install, activate, list, adapters
 examples/          — Example skill packages demonstrating the skill format and CLI usage
 openspec/          — OpenSpec change management artifacts (proposal, design, specs, tasks)
 .claude/, .codex/  — Generated adapter output for Claude Code and Codex runtimes
@@ -39,7 +39,7 @@ openspec/          — OpenSpec change management artifacts (proposal, design, s
 ```
 aule-cli (binary)
   ├── aule-schema    (manifest parsing, contract validation, permissions)
-  ├── aule-adapter   (generates SKILL.md per runtime target)
+  ├── aule-adapter   (pluggable adapter system, generates SKILL.md per adapter)
   ├── aule-resolver  (version resolution, policy checks, git clone)
   └── aule-cache     (artifact storage, activation state)
 ```
@@ -73,6 +73,10 @@ Changes live in `openspec/changes/<name>/` with: `proposal.md`, `design.md`, `sp
 - **Tool** — Executable tool declaration (runtime, entrypoint, typed JSON Schema input/output)
 - **Hooks** — Lifecycle scripts (onInstall, onActivate, onUninstall) executed by the CLI
 - **Contract** — Versioned interface (v0.1.0 only): inputs/outputs (prompt or JSON Schema), permissions, determinism bounds
-- **RuntimeTarget** — Defines directory layout and frontmatter mapping for a coding agent (Claude Code, Codex)
+- **AdapterDef** — Defines how a skill is transformed for a runtime. Two types:
+  - **Config-based** (`AdapterDef::Config`): Declarative path templates and frontmatter config, uses the built-in generation pipeline
+  - **Script-based** (`AdapterDef::Script`): External scripts that own the entire pipeline via stdin/stdout JSON protocol
+- **AdapterRegistry** — Discovers adapters from three sources with precedence: user-installed (`~/.skills/adapters/`) > skill-bundled (`<package>/adapters/`) > built-in (compiled). Built-in adapters (claude-code, codex, pi) are expressed as config-based definitions.
+- **adapter.yaml** — Adapter definition file declaring id, type (config/script), path templates, extra frontmatter fields, optional validate/generate scripts
 - **Resolver** — Selects version + adapter + artifact from local path, cache, or git URL
 - **Activation** — Binding an installed skill to a specific runtime by generating adapter files

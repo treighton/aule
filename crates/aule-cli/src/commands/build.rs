@@ -20,6 +20,7 @@ pub fn run(
     let options = GenerateOptions {
         targets: target.into_iter().collect(),
         output_dir,
+        ..Default::default()
     };
 
     let generated = generate_any(&manifest, &base_path, &options)

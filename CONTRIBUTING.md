@@ -113,14 +113,19 @@ cargo run -p aule-cli -- build --path examples/skill-init/ --target codex
 
 ### New runtime adapters
 
-Adding support for a new AI coding agent:
+Adding support for a new AI coding agent no longer requires modifying Aulë's source code. Create an `adapter.yaml` file with path templates and install it:
 
-1. Define the runtime target in `aule-adapter/src/target.rs`
-2. Add the target name to `aule-schema`'s known adapters
-3. Add activation support in `aule-cache`
-4. Write tests and generate reference output
+```bash
+skill adapters add --path ./my-adapter/   # Install from local directory
+skill adapters add --git <url>            # Install from git repo
+skill adapters test my-runtime            # Verify it works
+```
 
-See [docs/architecture.md](docs/architecture.md#adding-a-new-runtime-target) for details.
+Two adapter types are supported:
+- **Config-based**: Declarative path templates and frontmatter config (covers most runtimes)
+- **Script-based**: External scripts with full control via stdin/stdout JSON protocol
+
+See [docs/architecture.md](docs/architecture.md#adding-a-new-runtime-adapter) for details.
 
 ### Skills
 

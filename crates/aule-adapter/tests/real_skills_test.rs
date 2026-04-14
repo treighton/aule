@@ -26,6 +26,7 @@ fn generate_and_compare(skill_name: &str) {
     let options = GenerateOptions {
         targets: vec![],
         output_dir: Some(output_dir.path().to_path_buf()),
+        ..Default::default()
     };
 
     let _files = generate(&manifest, &skill_src, &options)
@@ -83,6 +84,42 @@ fn generate_and_compare(skill_name: &str) {
         "Codex SKILL.md mismatch for {}",
         skill_name
     );
+
+    // Compare Pi SKILL.md
+    let generated_pi = fs::read_to_string(
+        output_dir.path().join(format!(".pi/agent/skills/{}/SKILL.md", skill_name)),
+    )
+    .unwrap_or_else(|e| panic!("Generated Pi file missing for {}: {}", skill_name, e));
+
+    let expected_pi = fs::read_to_string(
+        root.join(format!(".pi/agent/skills/{}/SKILL.md", skill_name)),
+    )
+    .unwrap_or_else(|e| panic!("Expected Pi file missing for {}: {}", skill_name, e));
+
+    if generated_pi != expected_pi {
+        eprintln!("\n=== PI DIFF for {} ===", skill_name);
+        let gen_lines: Vec<&str> = generated_pi.lines().collect();
+        let exp_lines: Vec<&str> = expected_pi.lines().collect();
+        for (i, (g, e)) in gen_lines.iter().zip(exp_lines.iter()).enumerate() {
+            if g != e {
+                eprintln!("  Line {}: generated: {:?}", i + 1, g);
+                eprintln!("  Line {}: expected:  {:?}", i + 1, e);
+            }
+        }
+        if gen_lines.len() != exp_lines.len() {
+            eprintln!(
+                "  Line count: generated={}, expected={}",
+                gen_lines.len(),
+                exp_lines.len()
+            );
+        }
+    }
+
+    assert_eq!(
+        generated_pi, expected_pi,
+        "Pi SKILL.md mismatch for {}",
+        skill_name
+    );
 }
 
 /// Generate and compare v0.2.0 multi-skill packages.
@@ -101,6 +138,7 @@ fn generate_and_compare_v2(package_name: &str, skill_names: &[&str]) {
     let options = GenerateOptions {
         targets: vec![],
         output_dir: Some(output_dir.path().to_path_buf()),
+        ..Default::default()
     };
 
     let _files = generate_any(&manifest, &skill_src, &options)
@@ -157,6 +195,35 @@ fn generate_and_compare_v2(package_name: &str, skill_names: &[&str]) {
         assert_eq!(
             generated_codex, expected_codex,
             "Codex SKILL.md mismatch for {}/{}",
+            package_name, skill_name
+        );
+
+        // Compare Pi SKILL.md
+        let generated_pi = fs::read_to_string(
+            output_dir.path().join(format!(".pi/agent/skills/{}/SKILL.md", skill_name)),
+        )
+        .unwrap_or_else(|e| panic!("Generated Pi SKILL.md missing for {}/{}: {}", package_name, skill_name, e));
+
+        let expected_pi = fs::read_to_string(
+            root.join(format!(".pi/agent/skills/{}/SKILL.md", skill_name)),
+        )
+        .unwrap_or_else(|e| panic!("Expected Pi SKILL.md missing for {}/{}: {}", package_name, skill_name, e));
+
+        if generated_pi != expected_pi {
+            eprintln!("\n=== PI DIFF for {}/{} ===", package_name, skill_name);
+            let gen_lines: Vec<&str> = generated_pi.lines().collect();
+            let exp_lines: Vec<&str> = expected_pi.lines().collect();
+            for (i, (g, e)) in gen_lines.iter().zip(exp_lines.iter()).enumerate() {
+                if g != e {
+                    eprintln!("  Line {}: generated: {:?}", i + 1, g);
+                    eprintln!("  Line {}: expected:  {:?}", i + 1, e);
+                }
+            }
+        }
+
+        assert_eq!(
+            generated_pi, expected_pi,
+            "Pi SKILL.md mismatch for {}/{}",
             package_name, skill_name
         );
 

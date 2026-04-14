@@ -235,7 +235,7 @@ aule-cli (binary: `skill`)
 | Crate | Role | Key Types |
 |-------|------|-----------|
 | **aule-schema** | Protocol types and validation | `Manifest`, `ManifestV2`, `ManifestAny`, `Contract`, `SkillDefinition`, `Tool`, `Hooks` |
-| **aule-adapter** | Adapter generation | `RuntimeTarget`, `GeneratedFile`, `generate()`, `generate_v2()`, `generate_any()` |
+| **aule-adapter** | Pluggable adapter system | `AdapterDef`, `AdapterRegistry`, `GeneratedFile`, `generate()`, `generate_v2()`, `generate_any()` |
 | **aule-resolver** | Skill resolution from multiple sources | `ResolveRequest`, `ResolvePlan`, `resolve()` |
 | **aule-cache** | Local cache, activation, hook execution | `CacheManager`, `ActivationState`, `execute_hook()` |
 | **aule-cli** | CLI binary wrapping all crates | `Commands` enum, subcommand handlers |

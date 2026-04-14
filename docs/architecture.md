@@ -56,50 +56,76 @@ Raw YAML string
 
 ### aule-adapter
 
-Generates runtime-specific output files from a manifest and skill content.
+Pluggable adapter system that generates runtime-specific output files from a manifest and skill content. Adapters can be built-in, user-installed, or bundled with a skill package.
 
 **Key types:**
 
-- `RuntimeTarget` — defines the output layout for a specific agent (directory structure, frontmatter mapping)
+- `AdapterDef` — enum defining an adapter: `Config(ConfigAdapter)` (declarative) or `Script(ScriptAdapter)` (external script)
+- `AdapterRegistry` — discovers and resolves adapters from multiple sources with precedence
 - `GeneratedFile` — a path + content pair produced by the generator
 
-**Generation flow (v0.1.0):**
+**Adapter types:**
+
+- **Config-based**: Declarative `adapter.yaml` with path templates, command support, and extra frontmatter fields. Uses the built-in generation pipeline with different parameters.
+- **Script-based**: External scripts that receive manifest+content as JSON on stdin and return generated files as JSON on stdout. Owns the entire generation pipeline.
+
+**Adapter discovery (precedence order):**
+
+1. User-installed: `~/.skills/adapters/<id>/adapter.yaml` (highest)
+2. Skill-bundled: `<package>/adapters/<id>/adapter.yaml`
+3. Built-in: compiled into the binary (lowest)
+
+**Generation flow (config-based, v0.1.0):**
 
 ```
-(Manifest, skill_content: &str, RuntimeTarget) → Vec<GeneratedFile>
+(Manifest, skill_content: &str, AdapterDef::Config) → Vec<GeneratedFile>
 ```
 
 1. Read the manifest and resolve content paths
-2. Build YAML frontmatter for the target runtime
+2. Build YAML frontmatter using adapter's path templates and extra fields config
 3. Append the skill body unchanged (byte-identical passthrough)
-4. If commands are defined, generate one file per command
+4. If commands are defined and adapter supports them, generate one file per command
 5. Return the list of generated files
 
-**Generation flow (v0.2.0):**
+**Generation flow (config-based, v0.2.0):**
 
 ```
-(ManifestV2, base_path, RuntimeTarget) → Vec<GeneratedFile>
+(ManifestV2, base_path, AdapterDef::Config) → Vec<GeneratedFile>
 ```
 
 1. Resolve file globs from `files` list (deduplicated)
 2. For each skill in the `skills` map:
    a. Read the skill's entrypoint content
-   b. Build frontmatter from skill definition (not manifest-level)
+   b. Build frontmatter from skill definition using adapter config
    c. Append skill body
    d. If tools exist, append `## Tools` documentation section
    e. Copy all included files into the skill output directory
    f. Generate wrapper scripts for each tool (`tools/<name>`)
-   g. Generate command files (if the skill declares commands)
+   g. Generate command files (if the skill declares commands and adapter supports them)
 3. Mark wrapper scripts executable (chmod +x)
 
-The unified entry point `generate_any()` dispatches to the correct path based on `ManifestAny`.
+**Generation flow (script-based):**
 
-**Runtime targets currently defined:**
+```
+(ManifestAny, content, AdapterDef::Script) → Vec<GeneratedFile>
+```
 
-| Target | Skill output path | Command output path |
-|--------|-------------------|---------------------|
-| `claude-code` | `.claude/skills/{name}/SKILL.md` | `.claude/commands/{namespace}/{command}.md` |
-| `codex` | `.codex/skills/{name}/SKILL.md` | *(not supported)* |
+1. Resolve all content (skills, commands, files) into memory
+2. Serialize manifest + content + adapter config as JSON
+3. Execute the adapter's generate script with JSON on stdin
+4. Parse the script's stdout as JSON array of generated files
+5. Validate output: no path traversal, relative paths only, size limits
+6. Return the generated files
+
+The unified entry point `generate_any()` dispatches to the correct path based on `ManifestAny` and `AdapterDef`.
+
+**Built-in adapters:**
+
+| Adapter | Skill output path | Command output path | Extra fields |
+|---------|-------------------|---------------------|--------------|
+| `claude-code` | `.claude/skills/{name}/SKILL.md` | `.claude/commands/{namespace}/{command}.md` | — |
+| `codex` | `.codex/skills/{name}/SKILL.md` | *(not supported)* | — |
+| `pi` | `~/.pi/agent/skills/{name}/SKILL.md` | *(not supported)* | `allowed-tools`, `disable-model-invocation` |
 
 **Key design principle:** The skill body is never transformed. Adapter output = runtime frontmatter + original content. This means:
 
@@ -265,36 +291,69 @@ Input:                              Output (.claude/skills/my-skill/SKILL.md):
 └──────────────────────┘            └──────────────────────┘
 ```
 
-## Adding a New Runtime Target
+## Adding a New Runtime Adapter
 
-To support a new AI coding agent:
+The adapter system is pluggable — you can add support for a new AI coding agent without modifying the Aulë source code.
 
-1. **Define the target** in `aule-adapter/src/target.rs`:
-   - Output directory layout (where SKILL.md goes)
-   - Frontmatter field mapping (what the agent expects)
-   - Command support (if applicable)
+### Config-based adapter (most runtimes)
 
-2. **Add the target name** to `aule-schema`'s known adapters list
+Create an `adapter.yaml` file:
 
-3. **Add activation support** in `aule-cache` for the new runtime
+```yaml
+id: my-runtime
+type: config
+protocol: 1
+description: "Adapter for My Runtime"
+paths:
+  skill: ".my-runtime/skills/{name}/SKILL.md"
+  commands:                              # optional
+    path: ".my-runtime/commands/{namespace}/{command_name}.md"
+    display_name: "{skill}: {command}"
+    category: "Workflow"
+    tags: ["workflow", "{skill}", "{command}"]
+frontmatter:
+  extra_fields: []                       # fields from AdapterConfig.extra to include
+```
 
-4. **Write tests** — add cases to `real_skills_test.rs` for the new target
+Install it: `skill adapters add --path ./my-adapter/`
 
-5. **Generate reference output** — build the included skills for the new target and commit the output
+### Script-based adapter (custom output formats)
 
-The adapter system is designed to make this straightforward. Most of the work is defining the frontmatter mapping — the content passthrough is automatic.
+For runtimes that don't use SKILL.md:
+
+```yaml
+id: my-runtime
+type: script
+protocol: 1
+description: "Adapter for My Runtime"
+generate: ./generate.py
+validate: ./validate.py    # optional
+```
+
+The generate script receives JSON on stdin (manifest + content) and writes JSON to stdout (array of files).
+
+### CLI commands
+
+```bash
+skill adapters list              # See all available adapters
+skill adapters add --path ./dir  # Install from local directory
+skill adapters add --git <url>   # Install from git repo
+skill adapters remove <id>       # Remove user-installed adapter
+skill adapters info <id>         # Show adapter details
+skill adapters test <id>         # Test adapter correctness
+```
 
 ## Testing Strategy
 
 ```
 aule-schema     48 tests   Unit: parsing (v0.1.0 + v0.2.0), validation, edge cases
-aule-adapter    23 tests   Unit + integration: v0.1.0 generation, v0.2.0 generation,
-                            wrapper scripts, tool docs, file copying, real skill validation
+aule-adapter    55 tests   Unit + integration: adapter definitions, registry, script protocol,
+                            v0.1.0/v0.2.0 generation, wrapper scripts, tool docs, real skill validation
 aule-resolver   18 tests   Unit: resolution from each source, policy enforcement
 aule-cache      20 tests   Unit: install, activate, integrity, hooks, index operations
 aule-cli        14 tests   Integration: end-to-end CLI tests with temp directories
                 ──────
-                ~122 total
+                ~154 total
 ```
 
 The critical test is `real_skills_test.rs` in `aule-adapter`. It generates adapter output for all example skills (six v0.1.0, one v0.2.0) and asserts byte-for-byte equality with the committed output in `.claude/` and `.codex/`. The v0.2.0 test also verifies wrapper scripts, `## Tools` sections, and included file copying.
